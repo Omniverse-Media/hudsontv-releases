@@ -1,0 +1,9 @@
+{
+  "harbor_root": "/harbor",
+  "approved_roots": ["/projects"],
+  "removable_mount_prefixes": ["/volumeUSB"],
+  "checksum_algorithm": "xxh64",
+  "recent_window_hours": 72,
+  "layout": "flat",
+  "allow_clear": false
+}

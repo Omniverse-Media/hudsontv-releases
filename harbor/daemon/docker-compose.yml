@@ -1,0 +1,22 @@
+# Synology Container Manager project. Adjust the left-hand paths to your volumes.
+services:
+  harbor:
+    build: .
+    container_name: harbor-daemon
+    restart: unless-stopped
+    network_mode: none          # the daemon needs no network at all: SMB is the transport
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    tmpfs: ["/tmp"]
+    volumes:
+      - ./config/harbor.json:/etc/harbor/harbor.json:ro
+      - /volume1/harbor:/harbor                        # tickets, staging, logs, state
+      - /volume1/Projects:/projects                    # destination (must match approved_roots)
+      - type: bind                                     # USB cards, read-only by default
+        source: /volumeUSB1
+        target: /volumeUSB1
+        read_only: true                                # change to false ONLY to enable card clearing
+        bind:
+          propagation: rslave                          # so cards inserted later appear inside
+      - /dev/disk:/dev/disk:ro                         # volume serial lookup (by-uuid)
