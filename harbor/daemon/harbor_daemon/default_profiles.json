@@ -1,27 +1,85 @@
 {
   "extension_types": {
-    "video": ["mp4", "mov", "mxf", "mts", "m2ts", "avi", "mkv", "braw", "r3d", "crm", "mpg", "m4v"],
-    "photo": ["jpg", "jpeg", "arw", "raw", "cr2", "cr3", "nef", "dng", "heic", "hif", "png", "tif", "tiff", "orf", "rw2"],
-    "audio": ["wav", "bwf", "mp3", "aac", "flac", "aif", "aiff", "m4a"]
+    "video": [
+      "mp4",
+      "mov",
+      "mxf",
+      "mts",
+      "m2ts",
+      "avi",
+      "mkv",
+      "braw",
+      "r3d",
+      "crm",
+      "mpg",
+      "m4v"
+    ],
+    "photo": [
+      "jpg",
+      "jpeg",
+      "arw",
+      "raw",
+      "cr2",
+      "cr3",
+      "nef",
+      "dng",
+      "heic",
+      "hif",
+      "png",
+      "tif",
+      "tiff",
+      "orf",
+      "rw2"
+    ],
+    "audio": [
+      "wav",
+      "bwf",
+      "mp3",
+      "aac",
+      "flac",
+      "aif",
+      "aiff",
+      "m4a"
+    ]
   },
   "profiles": [
     {
       "name": "Sony video",
       "media_type": "video",
-      "signature": ["PRIVATE/M4ROOT"],
-      "roots": ["PRIVATE/M4ROOT"]
+      "signature": [
+        "PRIVATE/M4ROOT"
+      ],
+      "roots": [
+        "PRIVATE/M4ROOT"
+      ]
     },
     {
       "name": "Sony photo",
       "media_type": "photo",
-      "signature": ["DCIM"],
-      "roots": ["DCIM"]
+      "signature": [
+        "DCIM"
+      ],
+      "roots": [
+        "DCIM"
+      ]
     },
     {
-      "name": "Audio recorder (example: Zoom H/F series STEREO folder)",
+      "name": "Zoom recorder",
       "media_type": "audio",
-      "signature": ["STEREO"],
-      "roots": ["STEREO"]
+      "signature_any": [
+        "STEREO",
+        "MONO",
+        "4CH",
+        "MTR",
+        "FOLDER01"
+      ],
+      "roots": [
+        "STEREO",
+        "MONO",
+        "4CH",
+        "MTR",
+        "FOLDER01"
+      ]
     }
   ]
 }

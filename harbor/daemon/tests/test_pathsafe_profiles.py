@@ -43,3 +43,14 @@ def test_profiles_match_case_insensitive_and_classify(tmp_path):
     # Outside any profile root: classified by extension, else 'other'. Never dropped.
     assert ps.classify("MISC/take.wav", matched) == ("audio", None)
     assert ps.classify("MISC/notes.xyz", matched) == ("other", None)
+
+
+def test_zoom_profile_matches_any_known_folder_and_wav_anywhere_is_audio(tmp_path):
+    (tmp_path / "STEREO" / "FOLDER01").mkdir(parents=True)
+    ps = load_profiles()
+    matched = ps.match(str(tmp_path))
+    assert [p.name for p in matched] == ["Zoom recorder"]
+    assert ps.classify("STEREO/FOLDER01/ZOOM0001.WAV", matched) == ("audio", "Zoom recorder")
+    # Rode / Hollyland style card with no known folders: still audio by extension, still listed
+    assert ps.classify("RECORD/LARK_0001.WAV", []) == ("audio", None)
+    assert ps.classify("TX_01/REC0001.wav", []) == ("audio", None)

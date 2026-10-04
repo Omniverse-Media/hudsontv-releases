@@ -1,6 +1,6 @@
 """Device profiles: folder-pattern matching loaded from config.
 
-A profile matches when every signature path exists on the card (case-insensitive).
+A profile matches when every `signature` path exists (and, if `signature_any` is set, at least one of those) on the card (case-insensitive).
 Several profiles can match one card (Sony bodies carry both M4ROOT and DCIM).
 Files outside any matched profile root are still included, classified by extension;
 anything unclassifiable becomes media type 'other'. Nothing is ever skipped.
@@ -18,6 +18,7 @@ class Profile:
     media_type: str
     signature: tuple
     roots: tuple
+    signature_any: tuple = ()
 
 
 class ProfileSet:
@@ -32,7 +33,9 @@ class ProfileSet:
         """Return the profiles whose signature folders all exist on the card."""
         matched = []
         for p in self.profiles:
-            if all(_exists_ci(mount_path, s) for s in p.signature):
+            all_ok = all(_exists_ci(mount_path, s) for s in p.signature)
+            any_ok = not p.signature_any or any(_exists_ci(mount_path, s) for s in p.signature_any)
+            if (p.signature or p.signature_any) and all_ok and any_ok:
                 matched.append(p)
         return matched
 
@@ -72,6 +75,7 @@ def load_profiles(path=""):
     for p in data.get("profiles", []):
         if p["media_type"] not in MEDIA_TYPES:
             raise ValueError("profile %r has invalid media_type" % p.get("name"))
-        sig = tuple(p["signature"])
-        profiles.append(Profile(p["name"], p["media_type"], sig, tuple(p.get("roots", sig))))
+        sig = tuple(p.get("signature", ()))
+        any_ = tuple(p.get("signature_any", ()))
+        profiles.append(Profile(p["name"], p["media_type"], sig, tuple(p.get("roots", sig + any_)), any_))
     return ProfileSet(profiles, data.get("extension_types", {}))
