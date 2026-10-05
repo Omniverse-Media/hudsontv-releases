@@ -1,0 +1,114 @@
+name: Harbor Desktop installers
+
+# Builds Mac (dmg + zip, Intel and Apple Silicon) and Windows (NSIS installer).
+#   * Manual:  Actions tab > "Harbor Desktop installers" > Run workflow  (artifacts only)
+#   * Release: push a tag like  harbor-v0.1.0  -> installers attached to a draft GitHub release
+#
+# Signing is optional. Without the secrets below the installers are UNSIGNED and Mac/Windows
+# will show security warnings. See harbor/docs/RELEASING.md.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["harbor-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: harbor/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: harbor/desktop/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: mac
+            args: --mac
+          - os: windows-latest
+            name: windows
+            args: --win
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: harbor/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: harbor/desktop/package-lock.json
+      - run: npm ci
+
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/harbor-v')
+        shell: bash
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          [ "harbor-v$v" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} does not match package.json version $v"; exit 1; }
+
+      - name: Build installers
+        run: npx electron-builder ${{ matrix.args }} --publish never
+        env:
+          # Mac signing + notarization (all optional; unsigned build if MAC_CSC_LINK is unset)
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CSC_LINK != '' && 'true' || 'false' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows signing (optional)
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Write checksums
+        shell: bash
+        run: |
+          cd dist
+          for f in *.dmg *.zip *.exe; do [ -f "$f" ] && (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") ; done > SHA256SUMS-${{ matrix.name }}.txt
+          cat SHA256SUMS-${{ matrix.name }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harbor-${{ matrix.name }}
+          path: |
+            harbor/desktop/dist/*.dmg
+            harbor/desktop/dist/*.zip
+            harbor/desktop/dist/*.exe
+            harbor/desktop/dist/SHA256SUMS-*.txt
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/harbor-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" --draft --title "Harbor Desktop ${GITHUB_REF_NAME#harbor-v}" \
+            --notes "Unsigned unless signing secrets were configured. See harbor/docs/RELEASING.md."

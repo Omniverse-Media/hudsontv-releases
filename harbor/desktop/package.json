@@ -1,0 +1,70 @@
+{
+  "name": "harbor-desktop",
+  "version": "0.1.0",
+  "description": "Harbor Desktop - Powered by Omniverse",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "dist": "electron-builder --publish never"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "media.omniverse.harbor",
+    "productName": "Harbor",
+    "copyright": "Omniverse",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "core/**",
+      "renderer/**",
+      "assets/**"
+    ],
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "artifactName": "Harbor-${version}-${os}-${arch}.${ext}"
+  },
+  "author": "Omniverse Media <omniversemediagroup@gmail.com>",
+  "homepage": "https://github.com/Omniverse-Media/hudsontv-releases",
+  "license": "UNLICENSED"
+}

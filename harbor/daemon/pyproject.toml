@@ -1,0 +1,25 @@
+[project]
+name = "harbor-daemon"
+version = "0.1.0"
+description = "Harbor ingest daemon for Synology (Powered by Omniverse)"
+requires-python = ">=3.9"
+dependencies = ["xxhash>=3.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+harbor-daemon = "harbor_daemon.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["harbor_daemon*"]
+
+[tool.setuptools.package-data]
+harbor_daemon = ["default_profiles.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
