@@ -1,0 +1,52 @@
+name: Harbor CI
+
+on:
+  push:
+    paths: ["harbor/**", ".github/workflows/harbor-*.yml"]
+  pull_request:
+    paths: ["harbor/**", ".github/workflows/harbor-*.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  daemon:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    defaults:
+      run:
+        working-directory: harbor/daemon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pip install -e '.[dev]'
+      - run: pytest -q   # includes the desktop<->daemon interop tests (needs node)
+
+  desktop:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: harbor/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: harbor/desktop/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm audit --audit-level=high
+
+  daemon-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t harbor-daemon harbor/daemon

@@ -17,7 +17,7 @@ into project folders locally. The desktop app only sends instructions over the e
 | 5 Copy / verify / stage engine | done |
 | 6 Status handshake | done |
 | 7 Resume + proof-of-capture logs | done |
-| 8 Desktop app (Electron) | built, see [desktop/](desktop/README.md); UI verified headless, not yet run inside Electron on Mac/Windows |
+| 8 Desktop app (Electron) | built, see [desktop/](desktop/README.md); packaged and smoke-tested in real Electron on Linux, not yet on Mac/Windows hardware. Installers: [docs/RELEASING.md](docs/RELEASING.md) |
 | 9 ShareSync + mesh setup | documented only |
 | 10 Card-clear with confirmation gate | done |
 
