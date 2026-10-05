@@ -1,0 +1,23 @@
+{
+  "name": "harbor-desktop",
+  "version": "0.1.0",
+  "description": "Harbor Desktop - Powered by Omniverse",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "media.omniverse.harbor",
+    "productName": "Harbor",
+    "files": ["main.js", "preload.js", "core/**", "renderer/**", "assets/**"],
+    "mac": { "category": "public.app-category.video" },
+    "win": { "target": "nsis" }
+  }
+}

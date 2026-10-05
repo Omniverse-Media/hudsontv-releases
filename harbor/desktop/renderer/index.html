@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harbor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="logo">Harbor</span><span class="sub">Powered by Omniverse</span></div>
+    <div class="spacer"></div>
+    <span id="daemon-pill" class="pill off">Daemon: unknown</span>
+    <button id="btn-settings" class="ghost">Settings</button>
+  </header>
+  <div id="banner" class="banner hidden"></div>
+  <main>
+    <nav>
+      <h3>Cards</h3>
+      <ul id="card-list" class="list"></ul>
+      <h3>Recent jobs</h3>
+      <ul id="job-list" class="list"></ul>
+    </nav>
+    <section id="view"></section>
+  </main>
+  <dialog id="dlg"></dialog>
+  <script src="../core/logic.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

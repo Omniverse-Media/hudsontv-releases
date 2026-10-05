@@ -17,9 +17,14 @@ into project folders locally. The desktop app only sends instructions over the e
 | 5 Copy / verify / stage engine | done |
 | 6 Status handshake | done |
 | 7 Resume + proof-of-capture logs | done |
-| 8 Desktop app (Electron) | **not started** |
+| 8 Desktop app (Electron) | built, see [desktop/](desktop/README.md); UI verified headless, not yet run inside Electron on Mac/Windows |
 | 9 ShareSync + mesh setup | documented only |
 | 10 Card-clear with confirmation gate | done |
+
+## Desktop quick start
+```
+cd desktop && npm install && npm start
+```
 
 ## Daemon quick start (development)
 ```
