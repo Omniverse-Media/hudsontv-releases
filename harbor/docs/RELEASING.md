@@ -3,7 +3,20 @@
 Workflow: `.github/workflows/harbor-desktop-release.yml`. CI (`harbor-ci.yml`) runs daemon tests, desktop tests,
 `npm audit` and a daemon Docker build on every push/PR touching `harbor/`.
 
-## Build installers
+## Build locally (no GitHub)
+Installers must be built on the OS they target: a Mac builds the `.dmg`, Windows builds the `.exe`
+(Linux cannot produce either; electron-builder needs macOS tooling or Wine).
+```
+cd harbor/desktop
+npm ci
+npm test
+npm run dist:mac     # on a Mac  -> dist/Harbor-<ver>-mac-arm64.dmg and -x64.dmg
+npm run dist:win     # on Windows -> dist/Harbor-<ver>-win-x64.exe
+```
+Unsigned unless you export `CSC_LINK` / `CSC_KEY_PASSWORD` (see Signing below). On a Mac without a Developer ID
+certificate set `CSC_IDENTITY_AUTO_DISCOVERY=false` so it does not look for one.
+
+## Build installers on GitHub
 * **Try it:** GitHub > Actions > "Harbor Desktop installers" > Run workflow (on any branch). Download the
   `harbor-mac` / `harbor-windows` artifacts. Nothing is published.
 * **Release:** bump `version` in `harbor/desktop/package.json`, commit, then
