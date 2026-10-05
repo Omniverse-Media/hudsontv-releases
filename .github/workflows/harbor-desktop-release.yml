@@ -64,7 +64,14 @@ jobs:
           [ "harbor-v$v" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} does not match package.json version $v"; exit 1; }
 
       - name: Build installers
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        shell: bash
+        run: |
+          # A secret that is not set arrives as an empty string; electron-builder would then treat
+          # CSC_LINK="" as a file path and fail ("... not a file"). Drop empty signing vars.
+          for v in CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!v}" ] || unset "$v"
+          done
+          npx electron-builder ${{ matrix.args }} --publish never
         env:
           # Mac signing + notarization (all optional; unsigned build if MAC_CSC_LINK is unset)
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
