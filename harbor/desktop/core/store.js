@@ -6,6 +6,7 @@ const { DEFAULT_SUBFOLDERS } = require('./ticket');
 
 const DEFAULTS = {
   shareRoot: '',
+  shareUrl: '', // smb:// address of the share, learned while it was mounted, for reconnecting after sleep
   machine: os.hostname(),
   user: safeUser(),
   subfolderMap: DEFAULT_SUBFOLDERS,

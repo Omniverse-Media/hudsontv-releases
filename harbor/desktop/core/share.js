@@ -34,7 +34,7 @@ function readJson(file) {
 function checkShare(shareRoot) {
   const d = dirs(shareRoot);
   if (!shareRoot || !fs.existsSync(d.cards)) {
-    return { ok: false, error: 'Harbor share not found. Check that the drive is mapped and the path is correct.' };
+    return { ok: false, missing: true, error: "Can't reach the Harbor folder on your NAS." };
   }
   if (!fs.existsSync(d.incoming)) {
     return { ok: false, error: 'tickets/incoming is missing on the share.' };

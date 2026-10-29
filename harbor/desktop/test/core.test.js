@@ -225,3 +225,20 @@ test('playback: card share name, mount lookup, SMB host and safe paths', () => {
   assert.equal(pb.canPlayInside('X/C1.MP4'), true);
   assert.equal(pb.canPlayInside('X/A001.R3D'), false);
 });
+
+test('poller reports the daemon offline once the share is unreachable', () => {
+  const root = makeShare();
+  fs.writeFileSync(path.join(share.dirs(root).cards, '_daemon.json'), JSON.stringify({ updated_at: new Date().toISOString() }));
+  const events = [];
+  let r = root;
+  const p = new Poller(() => r, (t, d) => events.push([t, d]));
+  p.tick();
+  assert.equal(events.filter((e) => e[0] === 'daemon').pop()[1].online, true);
+  r = path.join(root, 'gone');
+  p.tick(); p.tick();
+  const shares = events.filter((e) => e[0] === 'share');
+  assert.equal(shares[shares.length - 1][1].missing, true);
+  const daemons = events.filter((e) => e[0] === 'daemon');
+  assert.equal(daemons.length, 2);
+  assert.equal(daemons[1][1].online, false);
+});

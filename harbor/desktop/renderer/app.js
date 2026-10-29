@@ -38,7 +38,7 @@ function cardUi(fp) {
 // ---------- boot ----------
 async function init() {
   const st = await window.harbor.getState();
-  S.settings = st.settings; S.history = st.history; S.daemon = st.daemon; S.share = st.share;
+  S.settings = st.settings; S.history = st.history; S.daemon = st.daemon; S.share = st.share; S.reconnect = st.reconnect || {};
   for (const m of st.cards) S.cards.set(m.card.fingerprint, m);
   window.harbor.onEvent(onEvent);
   $('btn-settings').addEventListener('click', openSettings);
@@ -61,6 +61,7 @@ function onEvent({ type, payload }) {
   } else if (type === 'card-gone') S.cards.delete(payload);
   else if (type === 'daemon') S.daemon = payload;
   else if (type === 'share') S.share = payload;
+  else if (type === 'reconnect') S.reconnect = payload;
   else if (type === 'status') S.statuses.set(payload.ticket_id, payload);
   renderAll();
 }
@@ -68,14 +69,37 @@ function onEvent({ type, payload }) {
 // ---------- chrome ----------
 function renderAll() {
   const pill = $('daemon-pill');
-  pill.textContent = S.daemon.online ? 'Daemon online' : 'Daemon offline';
-  pill.className = 'pill ' + (S.daemon.online ? 'on' : 'off');
-  const b = $('banner');
-  if (!S.share.ok) { b.textContent = S.share.error || 'Harbor share not connected.'; b.className = 'banner bad'; }
-  else if (!S.daemon.online) { b.textContent = 'The Harbor daemon is not responding. You can queue nothing until it is back.'; b.className = 'banner warn'; }
-  else b.className = 'banner hidden';
+  pill.textContent = !S.share.ok ? 'NAS not connected' : S.daemon.online ? 'NAS online' : 'Harbor on the NAS is not running';
+  pill.className = 'pill ' + (S.share.ok && S.daemon.online ? 'on' : 'off');
+  renderBanner();
   renderNav();
   renderView();
+}
+
+function renderBanner() {
+  const b = $('banner');
+  const rc = S.reconnect || {};
+  const host = (rc.url || '').replace(/^smb:\/\/(?:[^@/]+@)?([^/]+)\/.*$/, '$1').replace(/\._smb\._tcp\.local$|\.local$/, '');
+  if (!S.share.ok) {
+    b.className = 'banner bad';
+    if (!S.settings.shareRoot) {
+      b.replaceChildren(h('span', {}, 'Choose the Harbor folder on your NAS to get started.'), h('button', { class: 'ghost', onclick: openSettings }, 'Open Settings'));
+    } else if (rc.busy) {
+      b.className = 'banner warn';
+      b.replaceChildren(h('span', {}, `Reconnecting to ${host || 'your NAS'}…`));
+    } else {
+      b.replaceChildren(...[
+        h('span', {}, S.share.missing
+          ? `Your Mac lost its connection to the Harbor folder${host ? ` on ${host}` : ''}. This usually happens after the Mac sleeps or the network drops.`
+          : S.share.error),
+        rc.failed ? h('span', { class: 'hint' }, 'Reconnecting didn’t work. Check that the NAS is on and this Mac is on the same network.') : null,
+        rc.url ? h('button', { onclick: () => window.harbor.reconnect() }, 'Reconnect') : null,
+        h('button', { class: 'ghost', onclick: openSettings }, rc.url ? 'Settings' : 'Choose folder…')].filter(Boolean));
+    }
+  } else if (!S.daemon.online) {
+    b.className = 'banner warn';
+    b.replaceChildren(h('span', {}, 'Harbor on the NAS isn’t responding, so cards won’t update and ingests will wait. It restarts on its own when the NAS boots.'));
+  } else b.className = 'banner hidden';
 }
 
 function renderNav() {
@@ -124,7 +148,11 @@ function renderView() {
   const top = v.scrollTop;
   v.replaceChildren();
   v.dataset.viewKey = S.view ? S.view.kind + ':' + S.view.id : '';
-  if (!S.view) { v.append(h('div', { class: 'empty' }, 'Insert a card into the NAS USB port. Harbor will notify you when it is detected.')); return; }
+  if (!S.view) {
+    v.append(h('div', { class: 'empty' }, S.share.ok ? 'Insert a card into the NAS USB port. Harbor will notify you when it is detected.'
+      : 'Cards on the NAS show up here once your Mac is connected to it again.'));
+    return;
+  }
   if (S.view.kind === 'card' || S.view.kind === 'volume') {
     const m = S.cards.get(S.view.id);
     if (!m || !m.present) { v.append(h('div', { class: 'empty' }, 'This card is no longer inserted.')); return; }
@@ -250,18 +278,21 @@ function tile(fp, f, ui) {
   const on = ui.selected.has(f.relative_path);
   const toggle = () => { on ? ui.selected.delete(f.relative_path) : ui.selected.add(f.relative_path); renderAll(); };
   const pic = f.thumb ? thumbImg(`harbor-thumb://card/${encodeURIComponent(fp)}/${encodeURIComponent(f.thumb)}`)
-    : h('div', { class: 'ph ' + f.media_type }, h('span', { class: 'ico' }, TYPE_ICON[f.media_type] || '•'),
-      h('span', { class: 'ext' }, (f.relative_path.split('.').pop() || '').toUpperCase()));
-  return h('div', { class: 'tile' + (on ? ' on' : '') + (f.recent ? ' recent' : ''), title: f.relative_path, onclick: toggle },
+    : h('div', { class: 'ph ' + f.media_type }, playable(f) ? null : h('span', { class: 'ico' }, TYPE_ICON[f.media_type] || '•'),
+      playable(f) ? null : h('span', { class: 'ext' }, (f.relative_path.split('.').pop() || '').toUpperCase()));
+  return h('div', { class: 'tile' + (on ? ' on' : '') + (f.recent ? ' recent' : ''), title: playable(f) ? `${f.relative_path}\nDouble-click to play` : f.relative_path,
+    onclick: toggle, ondblclick: playable(f) ? (e) => { e.preventDefault(); playClip(fp, f); } : null },
     h('div', { class: 'pic' }, pic,
       h('span', { class: 'check' }, on ? '✓' : ''),
       f.recent ? h('span', { class: 'badge new' }, 'NEW') : null,
       f.duration != null ? h('span', { class: 'badge dur' }, fmtDur(f.duration)) : null,
-      f.media_type === 'video' || f.media_type === 'audio'
+      playable(f)
         ? h('button', { class: 'playbtn', title: 'Play', onclick: (e) => { e.stopPropagation(); playClip(fp, f); } }, '▶') : null),
     h('div', { class: 'name' }, f.filename || f.relative_path.split('/').pop()),
     h('div', { class: 'meta' }, `${fmtClock(f.timestamp)} · ${fmtBytes(f.size)}`));
 }
+
+const playable = (f) => f.media_type === 'video' || f.media_type === 'audio';
 
 function playClip(fp, f) {
   window.HarborPlayer.open({ h, fingerprint: fp, file: f, onLook: async (look) => {

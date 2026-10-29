@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net, powerMonitor } = require('electron');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -9,7 +9,7 @@ const { withSidecars } = require('./core/logic');
 const { Poller } = require('./core/poller');
 const { Store } = require('./core/store');
 const playback = require('./core/playback');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
 
@@ -76,6 +76,7 @@ function setupIpc() {
     cards: [...latest.cards.values()],
     daemon: latest.daemon,
     share: latest.share,
+    reconnect: { busy: reconnect.busy, failed: reconnect.failed, url: store.settings().shareUrl || null },
   }));
 
   ipcMain.handle('harbor:saveSettings', (_e, patch) => {
@@ -85,6 +86,8 @@ function setupIpc() {
     if ('shareRoot' in allowed) poller.tick();
     return s;
   });
+
+  ipcMain.handle('harbor:reconnect', () => tryReconnect(true));
 
   ipcMain.handle('harbor:pickShare', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Select the mapped Harbor share' });
@@ -226,8 +229,44 @@ function registerMediaProtocol() {
   });
 }
 
+// After sleep or a network blip macOS drops the SMB mount. Remember the share's smb:// address while it
+// works, and remount it quietly with the saved Keychain login when it goes missing.
+const reconnect = { busy: false, lastTry: 0, failed: false };
+function smbUrlFor(root) {
+  try {
+    for (const line of execFileSync('/sbin/mount', { encoding: 'utf8' }).split('\n')) {
+      const m = /^\/\/(?:[^@/]+@)?([^/\s]+)\/(\S+) on (.+?) \(smbfs/.exec(line);
+      if (m && path.resolve(m[3]) === path.resolve(root)) return `smb://${m[1]}/${m[2]}`;
+    }
+  } catch (e) { /* not macOS */ }
+  return null;
+}
+function rememberShareUrl() {
+  const s = store.settings();
+  if (!s.shareRoot) return;
+  const url = smbUrlFor(s.shareRoot);
+  if (url && url !== s.shareUrl) store.saveSettings({ shareUrl: url });
+}
+function tryReconnect(force = false) {
+  const url = store.settings().shareUrl;
+  if (process.platform !== 'darwin' || !url || reconnect.busy) return false;
+  if (!force && Date.now() - reconnect.lastTry < 60000) return false;
+  reconnect.busy = true; reconnect.lastTry = Date.now();
+  send('reconnect', { busy: true, url });
+  // `mount volume` uses the Keychain login and shows no Finder window; it asks for a password only if none is saved.
+  execFile('/usr/bin/osascript', ['-e', `mount volume ${JSON.stringify(url)}`], { timeout: 45000 }, (err) => {
+    reconnect.busy = false; reconnect.failed = !!err;
+    send('reconnect', { busy: false, failed: !!err, url });
+    if (poller) poller.tick();
+  });
+  return true;
+}
+
 function startPoller() {
   poller = new Poller(() => store.settings().shareRoot, (type, payload) => {
+    if (type === 'share') {
+      if (payload.ok) { reconnect.failed = false; rememberShareUrl(); } else tryReconnect();
+    }
     if (type === 'card') {
       latest.cards.set(payload.manifest.card.fingerprint, payload.manifest);
       if (payload.isNew) notifyCard(payload.manifest);
@@ -252,6 +291,7 @@ else {
     setupIpc();
     startPoller();
     createWindow();
+    powerMonitor.on('resume', () => setTimeout(() => { if (poller) poller.tick(); }, 4000));
     tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png')));
     tray.setToolTip('Harbor');
     tray.setContextMenu(Menu.buildFromTemplate([

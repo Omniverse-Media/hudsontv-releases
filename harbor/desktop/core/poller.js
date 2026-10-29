@@ -29,7 +29,11 @@ class Poller {
       this.shareOk = chk.ok;
       this.emit('share', chk);
     }
-    if (!chk.ok) return;
+    if (!chk.ok) {
+      // Without the share there is no heartbeat to read: don't keep showing the last one as online.
+      if (this.daemonSig !== 'unreachable') { this.daemonSig = 'unreachable'; this.emit('daemon', { online: false, info: null }); }
+      return;
+    }
 
     const d = share.readDaemonInfo(root);
     const dsig = JSON.stringify([d.online, d.info && d.info.approved_roots, d.info && d.info.allow_clear, d.info && d.info.destinations]);

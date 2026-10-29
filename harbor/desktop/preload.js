@@ -5,6 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('harbor', {
   getState: () => ipcRenderer.invoke('harbor:getState'),
   saveSettings: (patch) => ipcRenderer.invoke('harbor:saveSettings', patch),
+  reconnect: () => ipcRenderer.invoke('harbor:reconnect'),
   pickShare: () => ipcRenderer.invoke('harbor:pickShare'),
   submit: (req) => ipcRenderer.invoke('harbor:submit', req),
   confirmClear: (ticketId) => ipcRenderer.invoke('harbor:confirmClear', ticketId),
