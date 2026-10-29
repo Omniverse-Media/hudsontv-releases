@@ -1,3 +1,4 @@
+import shutil
 import errno
 import json
 import os
@@ -207,6 +208,33 @@ def test_cross_device_handoff_fallback(ready, monkeypatch):
     assert ready.status(t["ticket_id"])["state"] == "done"
     assert read(dest(ready, "Footage/Video", "C0002.MP4")) == read(os.path.join(ready.card, "PRIVATE/M4ROOT/CLIP/C0002.MP4"))
     # no stray partial files for ShareSync to find
+    assert [n for n in os.listdir(dest(ready, "Footage/Video")) if "partial" in n] == []
+
+
+def test_cross_device_handoff_does_not_copy_permissions(ready, monkeypatch):
+    # Synology ACL shares refuse chmod/xattr from the unprivileged container; the handoff must not need them.
+    real_link = os.link
+    calls = {"n": 0}
+
+    def fake_link(src, dst, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(errno.EXDEV, "cross-device")
+        return real_link(src, dst, **kw)
+
+    def refuse(*a, **k):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(os, "link", fake_link)
+    monkeypatch.setattr(shutil, "copystat", refuse)
+    monkeypatch.setattr(os, "chmod", refuse)
+    t = ready.ticket(rels=["PRIVATE/M4ROOT/CLIP/C0002.MP4"])
+    ready.submit(t)
+    ready.daemon().tick()
+    assert ready.status(t["ticket_id"])["state"] == "done"
+    src = os.path.join(ready.card, "PRIVATE/M4ROOT/CLIP/C0002.MP4")
+    out = dest(ready, "Footage/Video", "C0002.MP4")
+    assert read(out) == read(src) and int(os.stat(out).st_mtime) == int(os.stat(src).st_mtime)
     assert [n for n in os.listdir(dest(ready, "Footage/Video")) if "partial" in n] == []
 
 

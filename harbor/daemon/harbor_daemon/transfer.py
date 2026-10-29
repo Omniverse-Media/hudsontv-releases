@@ -339,17 +339,19 @@ class JobRunner:
                 raise
         tmp = os.path.join(os.path.dirname(final), "." + os.path.basename(final) + self.cfg.handoff_partial_suffix)
         _silent_unlink(tmp)
-        shutil.copyfile(staged, tmp)
-        shutil.copystat(staged, tmp)
-        fd = os.open(tmp, os.O_RDONLY)
         try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        if hashing.hash_file(tmp, self.algo, cold=True) != checksum:
-            _silent_unlink(tmp)
-            raise FileFailed("destination copy failed checksum verification")
-        try:
+            shutil.copyfile(staged, tmp)
+            # Only the timestamps. Permissions and xattrs are the share's business: on a Synology ACL share
+            # a chmod from this unprivileged container is refused (EACCES) or locks the file.
+            st = os.stat(staged)
+            os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+            fd = os.open(tmp, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            if hashing.hash_file(tmp, self.algo, cold=True) != checksum:
+                raise FileFailed("destination copy failed checksum verification")
             try:
                 os.link(tmp, final)
             except OSError:
