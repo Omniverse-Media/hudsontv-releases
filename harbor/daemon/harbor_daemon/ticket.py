@@ -19,6 +19,7 @@ from .pathsafe import PathError, check_component, check_relpath, resolve_within
 from .profiles import MEDIA_TYPES
 
 _FP = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_ROLL_PREFIX = re.compile(r"^[A-Za-z0-9]{1,4}$")
 
 
 class TicketError(Exception):
@@ -46,6 +47,8 @@ class Ticket:
     verify: bool
     clear_card: bool
     digest: str  # sha256 of the canonical ticket JSON, to detect edits after acceptance
+    # DIT layout: {"day", "group", "roll_prefix"} -> <project>/<day>/<group>/<roll>/<card folders>
+    dit: dict = None
 
 
 def _req(d, key, typ, where):
@@ -119,6 +122,22 @@ def validate(raw, cfg, filename_id=None):
         except PathError as e:
             raise TicketError("subfolder_map[%s]: %s" % (mtype, e))
 
+    dit = dest.get("dit")
+    if dit is not None:
+        if not isinstance(dit, dict):
+            raise TicketError("destination.dit must be an object")
+        day = _req(dit, "day", str, "destination.dit")
+        group = _req(dit, "group", str, "destination.dit")
+        prefix = _req(dit, "roll_prefix", str, "destination.dit")
+        for what, val in (("day", day), ("group", group)):
+            try:
+                check_component(val)
+            except PathError as e:
+                raise TicketError("destination.dit.%s: %s" % (what, e))
+        if not _ROLL_PREFIX.match(prefix):
+            raise TicketError("destination.dit.roll_prefix must be 1-4 letters or digits")
+        dit = {"day": day, "group": group, "roll_prefix": prefix.upper()}
+
     sel_raw = _req(raw, "selection", list, "ticket")
     if not sel_raw:
         raise TicketError("selection is empty")
@@ -155,7 +174,7 @@ def validate(raw, cfg, filename_id=None):
         raise TicketError("clear_card requested but card clearing is disabled on this server")
 
     return Ticket(tid, created, origin, fp, project_name, posixpath.normpath(approved_root),
-                  subfolder_map, selection, copy_, verify, clear, canonical_digest(raw))
+                  subfolder_map, selection, copy_, verify, clear, canonical_digest(raw), dit)
 
 
 def project_dir(ticket):
@@ -163,10 +182,20 @@ def project_dir(ticket):
     return resolve_within(ticket.approved_root, ticket.project_name)
 
 
-def destination_dir(ticket, media_type, rel_subdir=""):
+def destination_dir(ticket, media_type, rel_subdir="", roll=None):
     pdir = project_dir(ticket)
+    if ticket.dit:
+        # One roll folder per card offload, with the card's own folder structure kept intact.
+        if not roll:
+            raise PathError("DIT ticket without a roll")
+        base = posixpath.join(ticket.dit["day"], ticket.dit["group"], roll)
+        return resolve_within(pdir, posixpath.join(base, rel_subdir) if rel_subdir else base)
     sub = ticket.subfolder_map[media_type]
     return resolve_within(pdir, posixpath.join(sub, rel_subdir) if rel_subdir else sub)
+
+
+def group_dir(ticket):
+    return resolve_within(project_dir(ticket), posixpath.join(ticket.dit["day"], ticket.dit["group"]))
 
 
 def bind_to_card(ticket, mount_path, profiles):

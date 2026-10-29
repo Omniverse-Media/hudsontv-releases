@@ -1,11 +1,13 @@
 """Whole-card manifest: path, size, checksum, timestamp, duration, media type, recent flag."""
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 from datetime import datetime, timezone
 
 from . import hashing
+from .detect import volume_label
 from .state import now_iso
 
 PHASE_LISTED = "pending"
@@ -71,14 +73,16 @@ def build_listing(cfg, profiles, mount, fingerprint, fp_source, record, now):
             "checksum": None,
             "recent": recent,
         })
+    mark_kinds(files, profiles.ext_to_type)
     return {
         "schema": 1,
         "present": True,
+        "role": "card",
         "card": {
             "fingerprint": fingerprint,
             "fingerprint_source": fp_source,
             "fstype": mount.fstype,
-            "label": os.path.basename(mount.path.rstrip("/")),
+            "label": volume_label(mount),
             "total_bytes": _total_bytes(mount.path),
         },
         "profiles_matched": [p.name for p in matched],
@@ -94,12 +98,85 @@ def build_listing(cfg, profiles, mount, fingerprint, fp_source, record, now):
     }
 
 
+THUMBNAIL_DIRS = {"thmbnl", "thumbnail", "thumbnails", ".thumbnails"}
+
+
+def mark_kinds(files, ext_to_type):
+    """Tag each file `kind`: "media" (a clip, photo or recording), "sidecar" (belongs to one, `sidecar_of`
+    names it) or "extra" (card housekeeping). The desktop shows media, and a selected clip brings its sidecars.
+
+    A sidecar shares the clip's folder and name stem (C0001.MP4 -> C0001M01.XML), or sits in a thumbnail
+    folder next to it (CLIP/C0001.MP4 -> THMBNL/C0001T01.JPG).
+    """
+    def split(rel):
+        d, fn = posixpath.split(rel)
+        stem, ext = os.path.splitext(fn)
+        return d, stem.lower(), ext.lower().lstrip(".")
+
+    primaries = {}  # dir -> [(stem, rel)]
+    for f in files:
+        d, stem, ext = split(f["relative_path"])
+        if ext in ext_to_type and posixpath.basename(d).lower() not in THUMBNAIL_DIRS:
+            f["kind"] = "media"
+            primaries.setdefault(d.lower(), []).append((stem, f["relative_path"]))
+    for f in files:
+        if f.get("kind") == "media":
+            continue
+        d, stem, _ext = split(f["relative_path"])
+        parent = posixpath.dirname(d).lower()
+        dirs = [d.lower()]
+        if posixpath.basename(d).lower() in THUMBNAIL_DIRS:
+            dirs = [k for k in primaries if posixpath.dirname(k) == parent]
+        owner = None
+        for k in dirs:
+            for pstem, rel in primaries.get(k, ()):
+                if stem.startswith(pstem) and (owner is None or len(pstem) > len(owner[0])):
+                    owner = (pstem, rel)
+        if owner:
+            f["kind"] = "sidecar"
+            f["sidecar_of"] = owner[1]
+        else:
+            f["kind"] = "extra"
+
+
 def _total_bytes(path):
     try:
         st = os.statvfs(path)
         return st.f_blocks * st.f_frsize
     except OSError:
         return None
+
+
+def _used_bytes(path):
+    try:
+        st = os.statvfs(path)
+        return (st.f_blocks - st.f_bfree) * st.f_frsize
+    except OSError:
+        return None
+
+
+def volume_stub(mount, fingerprint, fp_source, role):
+    """A USB volume the user has not chosen as a card ("unassigned") or has ruled out ("ignored").
+
+    Nothing on it is listed or read: a permanent multi-terabyte drive must not be walked or hashed.
+    """
+    return {
+        "schema": 1,
+        "present": True,
+        "role": role,
+        "card": {
+            "fingerprint": fingerprint,
+            "fingerprint_source": fp_source,
+            "fstype": mount.fstype,
+            "label": volume_label(mount),
+            "mount_path": mount.path,
+            "total_bytes": _total_bytes(mount.path),
+            "used_bytes": _used_bytes(mount.path),
+        },
+        "scanned_at": now_iso(),
+        "checksum_state": "not_scanned",
+        "files": [],
+    }
 
 
 def fill_checksums(cfg, mount, manifest, cache, publish=None, should_stop=lambda: False):

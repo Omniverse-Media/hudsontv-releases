@@ -9,21 +9,31 @@
    no access to `staging` or `state`. Disable the recycle bin on it. **Do not add `staging` or `state` to any
    Synology Drive / ShareSync task.**
 2. **Config:** copy `daemon/config/harbor.example.json` to `daemon/config/harbor.json`. `approved_roots` are the
-   paths *inside the container* (`/projects` below). Put the project shares you want writable there.
-3. **Container Manager:** create a project from `daemon/docker-compose.yml`. The USB mount uses
-   `propagation: rslave` so cards inserted after start appear in the container. If hot-plug does not show up, restart the
-   container after inserting a card, or run the daemon via Task Scheduler instead.
-4. **Baseline:** with no card inserted run `docker exec harbor-daemon harbor-daemon baseline`. If a permanent USB
-   disk is attached, add `--include-removable`, or list its serial in `known_server_volume_serials`.
-5. **Fingerprint check:** insert a card and confirm `tickets/cards/<fingerprint>.json` appears with
+   paths *inside the container* (`/projects` below). Put the project shares you want writable there, mount each one
+   read-write in `docker-compose.yml`, and give it a friendly name in `destination_labels` (shown in the app's
+   "Save to" menu, with the project folders already in it).
+3. **Container Manager:** create a project from `daemon/docker-compose.yml`. The host filesystem is mounted
+   read-only at `/host` with `propagation: rslave`, so a card in any USB slot (`/volumeUSB<n>`, where DSM changes n on
+   replug) appears in the container. **DSM 7.1** has no Container Manager, only the Docker package without compose
+   projects: create a Task Scheduler task (boot-up, user root) that runs
+   `cd /volume1/harbor/daemon && docker-compose up -d --build`.
+4. **Permanent USB drives:** with `card_selection: "ask"` (the example config) every USB volume shows up in the
+   desktop app under **USB drives** without being read. Mark each permanent drive **Not a card** once, and pick
+   **Use as card** for a card reader. Choices are remembered per volume. With `"auto"`, run
+   `docker exec harbor-daemon harbor-daemon baseline --include-removable` or list serials in
+   `known_server_volume_serials` instead.
+5. **Previews:** the daemon writes small JPEG thumbnails to `tickets/thumbs/<fingerprint>/` (Sony `THMBNL` images,
+   ffmpeg frames, raw embedded previews). Desktop users need read access there. Set `"thumbnails": false` to skip.
+6. **Fingerprint check:** insert a card and confirm `tickets/cards/<fingerprint>.json` appears with
    `fingerprint_source: "volume-serial"`. If it says `synthesized`, set `serial_command` in the config
    (for example `blkid -s UUID -o value {device}`) or expose the volume serial another way.
-6. **Same filesystem for staging and projects** gives an atomic, no-copy handoff. Separate shared folders on btrfs
+7. **Same filesystem for staging and projects** gives an atomic, no-copy handoff. Separate shared folders on btrfs
    are different subvolumes, so Harbor falls back to copying into `.<name>.harbor-partial` in the destination, re-verifying,
    then renaming into place. **Add `*.harbor-partial` to the ShareSync file filter** so partial files are never shipped.
 
 ## Card clearing (off by default)
-Set `"allow_clear": true` and change the USB bind mount to `read_only: false`. Leave both off unless you want it.
+Set `"allow_clear": true` and change the `/host` bind mount to `read_only: false` (this makes every share writable
+inside the container). Leave both off unless you want it.
 
 ## ShareSync and the private link (SPEC §8)
 * Both Synologies join a private mesh (Tailscale or Cloudflare Tunnel). Point Synology Drive ShareSync at the mesh

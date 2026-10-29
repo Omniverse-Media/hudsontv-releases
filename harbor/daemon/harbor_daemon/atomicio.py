@@ -28,3 +28,21 @@ def read_json(path, default=None):
             return json.load(f)
     except FileNotFoundError:
         return default
+
+
+def write_bytes_atomic(path, data):
+    """For files in the footage folders: created with the share's default mode (mkstemp's 0600 would hide
+    them from other SMB users), under a dot-name, then renamed into place."""
+    tmp = os.path.join(os.path.dirname(path), "." + os.path.basename(path) + ".tmp")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

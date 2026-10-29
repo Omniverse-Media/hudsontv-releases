@@ -12,10 +12,10 @@ import os
 import shutil
 import time
 
-from . import hashing
+from . import hashing, offload
 from .pathsafe import PathError
-from .state import now_iso
-from .ticket import TicketError, bind_to_card, destination_dir
+from .state import RollBook, now_iso
+from .ticket import TicketError, bind_to_card, destination_dir, group_dir, project_dir
 
 # Weights for the progress bar: copy, verify, handoff.
 _W_COPY, _W_VERIFY, _W_STAGE = 0.45, 0.45, 0.10
@@ -47,6 +47,7 @@ class JobRunner:
         self.staging = os.path.join(cfg.staging_dir, ticket.ticket_id)
         self.journal = None
         self.should_stop = lambda: False
+        self.card_label = None
 
     # ---- journal -------------------------------------------------------
     def _open_journal(self, bound):
@@ -66,6 +67,8 @@ class JobRunner:
             "started_at": now_iso(),
             "finished_at": None,
             "files": {},
+            "dit": self.ticket.dit,
+            "dit_roll": self._assign_roll() if self.ticket.dit else None,
         }
         for i, item in enumerate(self.ticket.selection):
             j["files"][item.relative_path] = {
@@ -88,6 +91,21 @@ class JobRunner:
                        project=self.ticket.project_name, files=len(self.ticket.selection),
                        checksum_algorithm=self.algo)
         return j
+
+    def _assign_roll(self):
+        t = self.ticket
+        try:
+            gdir = group_dir(t)
+            existing = os.listdir(gdir) if os.path.isdir(gdir) else []
+        except (PathError, OSError):
+            existing = []
+        return RollBook(self.cfg.state_dir).assign(t.approved_root, t.project_name, t.dit["day"], t.dit["group"],
+                                                   t.dit["roll_prefix"], t.fingerprint, existing)
+
+    def _dest_dir(self, rel, f):
+        keep_tree = self.cfg.layout == "preserve" or self.ticket.dit
+        return destination_dir(self.ticket, f["media_type"], os.path.dirname(rel) if keep_tree else "",
+                               roll=self.journal.get("dit_roll"))
 
     def _save(self):
         self.jobs.save(self.journal)
@@ -117,6 +135,8 @@ class JobRunner:
     def run(self):
         """Returns 'done', 'failed' or 'paused'. Raises TicketError for a bad/changed ticket."""
         bound = bind_to_card(self.ticket, self.mount_path, self.profiles)
+        if self.jobs.load(self.ticket.ticket_id) is None:
+            self._check_space()
         self.journal = self._open_journal(bound)
         self._save()
         self._publish()
@@ -157,9 +177,23 @@ class JobRunner:
                 self._save()
                 self.status.set_clear(self.ticket.ticket_id, self.journal["clear"])
             self._publish("done", message="all files verified on the server")
-        self._write_report(outcome)
+        report = self._write_report(outcome)
+        self._write_deliverables(report)
         shutil.rmtree(self.staging, ignore_errors=True)
         return outcome
+
+    def _check_space(self):
+        """Refuse up front rather than fail halfway: the selection must fit on staging and the destination."""
+        need = sum(item.size for item in self.ticket.selection) + self.cfg.min_free_bytes
+        for label, path in (("the destination", self.ticket.approved_root), ("Harbor's staging area", self.cfg.staging_dir)):
+            try:
+                st = os.statvfs(path)
+            except OSError:
+                continue
+            free = st.f_bavail * st.f_frsize
+            if free < need:
+                raise TicketError("not enough space on %s: this ingest needs %s, only %s free"
+                                  % (label, offload._fmt_bytes(need), offload._fmt_bytes(free)))
 
     # ---- per file ------------------------------------------------------
     def _process_file(self, rel, f, src):
@@ -273,14 +307,12 @@ class JobRunner:
             self._save()
             return
         try:
-            ddir = destination_dir(self.ticket, f["media_type"],
-                                   os.path.dirname(rel) if self.cfg.layout == "preserve" else "")
+            ddir = self._dest_dir(rel, f)
         except (PathError, KeyError) as e:
             raise FileFailed("destination invalid at handoff: %s" % e)
         os.makedirs(ddir, exist_ok=True)
         # Re-resolve after makedirs: a symlink swapped in since validation must not escape.
-        ddir = destination_dir(self.ticket, f["media_type"],
-                               os.path.dirname(rel) if self.cfg.layout == "preserve" else "")
+        ddir = self._dest_dir(rel, f)
 
         name = os.path.basename(rel)
         final, dedup = self._choose_name(ddir, name, f["src_checksum"], f["size"])
@@ -324,17 +356,19 @@ class JobRunner:
                 raise
         tmp = os.path.join(os.path.dirname(final), "." + os.path.basename(final) + self.cfg.handoff_partial_suffix)
         _silent_unlink(tmp)
-        shutil.copyfile(staged, tmp)
-        shutil.copystat(staged, tmp)
-        fd = os.open(tmp, os.O_RDONLY)
         try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        if hashing.hash_file(tmp, self.algo, cold=True) != checksum:
-            _silent_unlink(tmp)
-            raise FileFailed("destination copy failed checksum verification")
-        try:
+            shutil.copyfile(staged, tmp)
+            # Only the timestamps. Permissions and xattrs are the share's business: on a Synology ACL share
+            # a chmod from this unprivileged container is refused (EACCES) or locks the file.
+            st = os.stat(staged)
+            os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+            fd = os.open(tmp, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            if hashing.hash_file(tmp, self.algo, cold=True) != checksum:
+                raise FileFailed("destination copy failed checksum verification")
             try:
                 os.link(tmp, final)
             except OSError:
@@ -345,15 +379,45 @@ class JobRunner:
             _silent_unlink(tmp)
 
     # ---- report --------------------------------------------------------
+    def _write_deliverables(self, report):
+        """ASC MHL for the roll (verified files only) and the offload report, next to the footage."""
+        j = self.journal
+        try:
+            pdir = project_dir(self.ticket)
+            root = destination_dir(self.ticket, "other", "", roll=j["dit_roll"]) if j.get("dit") else pdir
+            entries = []
+            for f in j["files"].values():
+                if f["state"] != "staged" or not f["dest_path"] or not f["src_checksum"]:
+                    continue
+                rel = os.path.relpath(f["dest_path"], root)
+                if rel.startswith(".."):
+                    continue
+                entries.append({"path": rel.replace(os.sep, "/"), "size": f["size"], "mtime": f["src_mtime"] or 0,
+                                "hexdigest": f["src_checksum"].split(":", 1)[-1]})
+            mhl = offload.write_mhl(root, entries, self.algo) if self.cfg.write_mhl else None
+            if mhl:
+                report["mhl"] = os.path.relpath(mhl, pdir)
+                self.log.event("mhl_written", path=mhl, files=len(entries))
+            if self.cfg.write_offload_report:
+                out = os.path.join(pdir, j["dit"]["day"] if j.get("dit") else "", "Harbor reports")
+                base = "%s%s_%s" % ((j["dit"]["group"] + " " + j["dit_roll"] + "_") if j.get("dit") else "",
+                                    (j["finished_at"] or now_iso())[:19].replace(":", "").replace("T", "_"), j["ticket_id"][:8])
+                offload.write_report_files(out, base, report, card_label=self.card_label)
+                self.log.event("offload_report_written", path=os.path.join(out, base + ".html"))
+            self.log.write_report(report)
+        except (OSError, PathError) as e:
+            self.log.event("deliverables_failed", error=str(e))
+
     def _write_report(self, outcome):
         j = self.journal
-        self.log.write_report({
+        report = {
             "ticket_id": j["ticket_id"],
             "outcome": outcome,
             "source_card": {"fingerprint": j["fingerprint"]},
             "origin": self.ticket.origin,
             "project": self.ticket.project_name,
             "approved_root": self.ticket.approved_root,
+            "dit": dict(j["dit"], roll=j["dit_roll"]) if j.get("dit") else None,
             "checksum_algorithm": self.algo,
             "started_at": j["started_at"],
             "finished_at": j["finished_at"],
@@ -369,7 +433,9 @@ class JobRunner:
                  "destination": f["dest_path"], "times": f["times"], "error": f["error"], "note": f["note"]}
                 for r, f in j["files"].items()
             ],
-        })
+        }
+        self.log.write_report(report)
+        return report
 
 
 def _silent_unlink(path):

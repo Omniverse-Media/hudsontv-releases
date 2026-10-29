@@ -125,6 +125,20 @@ def _serial_by_blkid(device):
     return _serial_by_command(exe + " -s UUID -o value {device}", device)
 
 
+def volume_label(mount):
+    """The filesystem label (e.g. "SONY" or "Archive 2"), else the slot ("USB 6"): every DSM USB share
+    is called "usbshare", so the share name tells drives apart poorly."""
+    exe = shutil.which("blkid")
+    if exe:
+        val = _serial_by_command(exe + " -s LABEL -o value {device}", mount.device)
+        if val:
+            return val
+    m = re.search(r"/volumeUSB(\d+)(?:/|$)", mount.path, re.I)
+    if m:
+        return "USB %s" % m.group(1)
+    return os.path.basename(mount.path.rstrip("/")) or mount.path
+
+
 def _synthesized(mount):
     """Last resort when the OS exposes no volume serial: hash size, fstype and the
     earliest-modified files. Marked 'synthesized' so the desktop can warn."""

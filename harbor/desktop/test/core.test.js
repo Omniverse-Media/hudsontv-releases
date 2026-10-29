@@ -111,7 +111,16 @@ test('poller emits card appearance (notify only after first scan), removal and s
   p.tick();
   const cardEvents = events.filter((e) => e[0] === 'card');
   assert.equal(cardEvents[cardEvents.length - 1][1].isNew, true); // re-insert notifies again
-  fs.unlinkSync(path.join(cards, 'ABCD-1234.json'));
+  const manifestPath = path.join(cards, 'ABCD-1234.json');
+  const saved = fs.readFileSync(manifestPath);
+  fs.unlinkSync(manifestPath);
+  p.tick(); // a manifest briefly unreadable mid-rewrite must not drop the card
+  fs.writeFileSync(manifestPath, saved);
+  p.tick();
+  assert.ok(!events.some((e) => e[0] === 'card-gone'));
+  fs.unlinkSync(manifestPath);
+  p.tick(); p.tick();
+  assert.ok(!events.some((e) => e[0] === 'card-gone'));
   p.tick();
   assert.ok(events.some((e) => e[0] === 'card-gone'));
 
@@ -145,4 +154,91 @@ test('store persists settings and caps history', () => {
   for (let i = 0; i < 120; i++) s.addHistory({ ticket_id: 't' + i });
   assert.equal(s.history().length, 100);
   assert.equal(s.history()[0].ticket_id, 't119');
+});
+
+test('submitVolumeRole writes a select request the daemon can read', () => {
+  const root = makeShare();
+  share.submitVolumeRole(root, 'synth-0123abcd', 'ignore', { machine: 'mac', user: 'ed' });
+  const req = JSON.parse(fs.readFileSync(path.join(share.dirs(root).incoming, 'synth-0123abcd.select.json'), 'utf8'));
+  assert.equal(req.type, 'volume_select');
+  assert.equal(req.fingerprint, 'synth-0123abcd');
+  assert.equal(req.role, 'ignore');
+  assert.throws(() => share.submitVolumeRole(root, '../x', 'card', {}), /bad fingerprint/);
+  assert.throws(() => share.submitVolumeRole(root, 'ABCD', 'delete', {}), /bad volume role/);
+});
+
+test('poller re-emits a volume when its role changes', () => {
+  const root = makeShare();
+  const events = [];
+  const p = new Poller(() => root, (t, x) => events.push([t, x]));
+  const file = path.join(share.dirs(root).cards, 'ABCD-1234.json');
+  fs.writeFileSync(file, JSON.stringify(manifest({ role: 'unassigned', files: [], checksum_state: 'not_scanned' })));
+  p.tick();
+  fs.writeFileSync(file, JSON.stringify(manifest({ role: 'ignored', files: [], checksum_state: 'not_scanned' })));
+  p.tick();
+  const roles = events.filter((e) => e[0] === 'card').map((e) => e[1].manifest.role);
+  assert.deepEqual(roles, ['unassigned', 'ignored']);
+});
+
+test('withSidecars adds the metadata that belongs to a selected clip', () => {
+  const { withSidecars } = require('../core/logic');
+  const files = [
+    { relative_path: 'CLIP/C1.MP4', kind: 'media' },
+    { relative_path: 'CLIP/C1M01.XML', kind: 'sidecar', sidecar_of: 'CLIP/C1.MP4' },
+    { relative_path: 'CLIP/C2.MP4', kind: 'media' },
+    { relative_path: 'CLIP/C2M01.XML', kind: 'sidecar', sidecar_of: 'CLIP/C2.MP4' },
+  ];
+  assert.deepEqual(withSidecars(files, ['CLIP/C1.MP4']), ['CLIP/C1.MP4', 'CLIP/C1M01.XML']);
+});
+
+test('DIT rolls: group prefixes, day folder and ticket spec', () => {
+  const { rollPrefix, dayFolder } = require('../core/logic');
+  assert.equal(rollPrefix('Camera A'), 'A');
+  assert.equal(rollPrefix('Camera 2'), '2');
+  assert.equal(rollPrefix('Audio 1'), 'S');
+  assert.equal(rollPrefix('drone'), 'D');
+  assert.equal(dayFolder('2026-10-29T23:10:00'), '2026-10-29');
+  const t = buildTicket(base(manifest(), { dit: { day: '2026-10-29', group: 'Camera B' } }));
+  assert.deepEqual(t.destination.dit, { day: '2026-10-29', group: 'Camera B', roll_prefix: 'B' });
+  assert.throws(() => buildTicket(base(manifest(), { dit: { day: '2026-10-29', group: '../x' } })), /Group/);
+  assert.equal(buildTicket(base(manifest())).destination.dit, undefined);
+});
+
+test('playback: card share name, mount lookup, SMB host and safe paths', () => {
+  const pb = require('../core/playback');
+  const m = manifest({ card: { fingerprint: 'ABCD-1234', label: 'USB 6', mount_path: '/host/volumeUSB6/usbshare' } });
+  assert.equal(pb.cardShareName(m), 'usbshare6');
+  const vols = tmp();
+  const root = path.join(vols, 'usbshare6-1');
+  fs.mkdirSync(path.join(root, 'PRIVATE/M4ROOT/CLIP'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'PRIVATE/M4ROOT/CLIP/C1.MP4'), Buffer.alloc(10));
+  m.files[0].kind = 'media';
+  assert.equal(pb.findCardRoot(m, { volumesDir: vols }), root);
+  fs.writeFileSync(path.join(root, 'PRIVATE/M4ROOT/CLIP/C1.MP4'), Buffer.alloc(11)); // a different card in that slot
+  assert.equal(pb.findCardRoot(m, { volumesDir: vols }), null);
+  assert.equal(pb.clipPath(root, '../../etc/passwd'), null);
+  assert.equal(pb.clipPath(root, 'A/B.MP4'), path.join(root, 'A', 'B.MP4'));
+  const mount = '//maniakal@Thriller._smb._tcp.local/Harbor on /Volumes/Harbor (smbfs, nodev, nosuid, mounted by me)\n/dev/disk3s1 on / (apfs)';
+  assert.equal(pb.smbHost(mount, '/Volumes/Harbor'), 'Thriller._smb._tcp.local');
+  assert.equal(pb.smbHost(mount, '/Volumes/Other'), null);
+  assert.equal(pb.guessLook(m), 'slog3');
+  assert.equal(pb.canPlayInside('X/C1.MP4'), true);
+  assert.equal(pb.canPlayInside('X/A001.R3D'), false);
+});
+
+test('poller reports the daemon offline once the share is unreachable', () => {
+  const root = makeShare();
+  fs.writeFileSync(path.join(share.dirs(root).cards, '_daemon.json'), JSON.stringify({ updated_at: new Date().toISOString() }));
+  const events = [];
+  let r = root;
+  const p = new Poller(() => r, (t, d) => events.push([t, d]));
+  p.tick();
+  assert.equal(events.filter((e) => e[0] === 'daemon').pop()[1].online, true);
+  r = path.join(root, 'gone');
+  p.tick(); p.tick();
+  const shares = events.filter((e) => e[0] === 'share');
+  assert.equal(shares[shares.length - 1][1].missing, true);
+  const daemons = events.filter((e) => e[0] === 'daemon');
+  assert.equal(daemons.length, 2);
+  assert.equal(daemons[1][1].online, false);
 });

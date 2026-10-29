@@ -1,6 +1,8 @@
 'use strict';
 const share = require('./share');
 
+const MISSES_BEFORE_GONE = 3;
+
 // Polls the share (inotify/FSEvents are unreliable over SMB) and emits changes.
 class Poller {
   constructor(getShareRoot, emit, intervalMs = 2000) {
@@ -8,6 +10,7 @@ class Poller {
     this.emit = emit;
     this.intervalMs = intervalMs;
     this.cards = new Map(); // fingerprint -> signature string
+    this.misses = new Map(); // fingerprint -> consecutive polls without a readable manifest
     this.watched = new Map(); // ticketId -> last status JSON string
     this.timer = null;
     this.shareOk = null;
@@ -26,17 +29,22 @@ class Poller {
       this.shareOk = chk.ok;
       this.emit('share', chk);
     }
-    if (!chk.ok) return;
+    if (!chk.ok) {
+      // Without the share there is no heartbeat to read: don't keep showing the last one as online.
+      if (this.daemonSig !== 'unreachable') { this.daemonSig = 'unreachable'; this.emit('daemon', { online: false, info: null }); }
+      return;
+    }
 
     const d = share.readDaemonInfo(root);
-    const dsig = JSON.stringify([d.online, d.info && d.info.approved_roots, d.info && d.info.allow_clear]);
+    const dsig = JSON.stringify([d.online, d.info && d.info.approved_roots, d.info && d.info.allow_clear, d.info && d.info.destinations]);
     if (dsig !== this.daemonSig) { this.daemonSig = dsig; this.emit('daemon', d); }
 
     const seen = new Set();
     for (const m of share.listCards(root)) {
       const fp = m.card.fingerprint;
       seen.add(fp);
-      const sig = [m.present, m.checksum_state, m.scanned_at, Math.round((m.checksum_progress || 0) * 100), m.files.length].join('|');
+      const sig = [m.present, m.role, m.checksum_state, m.scanned_at, Math.round((m.checksum_progress || 0) * 100), m.files.length,
+        m.files.filter((f) => f.thumb).length].join('|');
       const prev = this.cards.get(fp);
       if (prev !== sig) {
         this.cards.set(fp, sig);
@@ -44,7 +52,13 @@ class Poller {
         this.emit('card', { manifest: m, isNew: isNew && !this.firstScan && m.present });
       }
     }
-    for (const fp of [...this.cards.keys()]) if (!seen.has(fp)) { this.cards.delete(fp); this.emit('card-gone', fp); }
+    // Over SMB a manifest being replaced can read as missing for a moment: only drop a card that stays gone.
+    for (const fp of [...this.cards.keys()]) {
+      if (seen.has(fp)) { this.misses.delete(fp); continue; }
+      const n = (this.misses.get(fp) || 0) + 1;
+      this.misses.set(fp, n);
+      if (n >= MISSES_BEFORE_GONE) { this.cards.delete(fp); this.misses.delete(fp); this.emit('card-gone', fp); }
+    }
     this.firstScan = false;
 
     for (const [id, last] of this.watched) {

@@ -7,6 +7,7 @@ Everything below lives under the `harbor_root` share (default `/harbor`).
 | `tickets/incoming/` | desktop | daemon | job tickets and clear confirmations |
 | `tickets/status/` | daemon | desktop | per-ticket status |
 | `tickets/cards/` | daemon | desktop | one manifest per detected card, plus `_daemon.json` |
+| `tickets/thumbs/` | daemon | desktop | `<fingerprint>/<name>.jpg` previews named by each file's `thumb` |
 | `tickets/processed/` | daemon | anyone | finished or rejected tickets |
 | `staging/` | daemon | nobody | copy + verify area. **Never synced.** |
 | `logs/` | daemon | desktop | proof of capture |
@@ -35,9 +36,24 @@ when checksums complete (`"complete"`). Wait for `complete` before building a ti
 `present` flips to `false` when the card is removed. Each file has `recent` (see below). A card matching no profile has
 `profile_matched: false`; every file is still listed.
 
+**Kinds** (`kind` per file): `media` (a clip, photo or recording), `sidecar` (metadata or camera thumbnail that
+belongs to the file named in `sidecar_of`) or `extra` (card housekeeping). The desktop shows media and adds a selected
+clip's sidecars to the ticket. `_daemon.json` lists `destinations`: `{root, label, projects}` per approved root.
+
+**Roles** (`role` field): `card` (listed and checksummed as above), `unassigned` or `ignored`. With
+`card_selection: "ask"` a newly detected USB volume is published as `unassigned`: `files` is empty, `checksum_state`
+is `not_scanned`, and `card` adds `mount_path` and `used_bytes`. Nothing on it is read until the user picks a role.
+Manifests from older daemons have no `role`; treat them as `card`.
+
 **Recent:** a file is recent when its timestamp is newer than the newest *file* timestamp from the last successful
 ingest of this card (immune to camera/NAS clock differences). For a never-ingested card, files within
 `recent_window_hours` count. `last_ingest_at` (NAS clock) is also published.
+
+## Choosing a role for a USB volume: `incoming/<fingerprint>.select.json`
+`{"type":"volume_select","fingerprint":"…","role":"card"|"ignore","created_at":"…","origin":{…}}`. The file name
+must equal the fingerprint. The daemon remembers the choice in `state/volume_roles.json` and applies it whenever that
+volume is attached: `card` scans it, `ignore` republishes it as `ignored`. Tickets for a volume that is not a card are
+rejected.
 
 ## Status: `status/<ticket_id>.json`
 `state`: `received | in_progress | done | failed`. Per file: `pending | copying | copied | verified | staged | failed`

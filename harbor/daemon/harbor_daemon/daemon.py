@@ -9,12 +9,12 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from . import __version__, clear, detect, manifest as manifest_mod
-from .atomicio import write_json_atomic
+from . import __version__, clear, detect, manifest as manifest_mod, thumbs
+from .atomicio import read_json, write_json_atomic
 from .config import Config
 from .joblog import JobLog
 from .profiles import ProfileSet, load_profiles
-from .state import CardStore, JobStore, now_iso
+from .state import CardStore, JobStore, VolumeRoles, now_iso
 from .status import StatusWriter
 from .ticket import TicketError, validate
 from .transfer import JobRunner
@@ -25,10 +25,11 @@ PARTIAL_TICKET_GRACE = 10.0  # seconds: a half-uploaded ticket may still be arri
 
 
 class _Card:
-    def __init__(self, mount, fingerprint, source):
+    def __init__(self, mount, fingerprint, source, role="card"):
         self.mount = mount
         self.fingerprint = fingerprint
         self.source = source
+        self.role = role  # "card", "unassigned" or "ignored"
         self.manifest = None
         self.stop = threading.Event()
 
@@ -54,6 +55,7 @@ class Daemon:
         self.cards = {}  # fingerprint -> _Card
         self.lock = threading.RLock()
         self.card_store = CardStore(cfg.state_dir)
+        self.volume_roles = VolumeRoles(cfg.state_dir)
         self.jobs = JobStore(cfg.state_dir)
         self.status = StatusWriter(cfg.status_dir)
         self.stop_event = threading.Event()
@@ -108,11 +110,44 @@ class Daemon:
             "version": __version__,
             "updated_at": now_iso(),
             "approved_roots": self.cfg.approved_roots,
+            "destinations": self._destinations(),
             "checksum_algorithm": self.cfg.checksum_algorithm,
             "layout": self.cfg.layout,
             "allow_clear": self.cfg.allow_clear,
+            "card_selection": self.cfg.card_selection,
             "profiles": [p.name for p in self.profiles.profiles],
         })
+
+    def _destinations(self):
+        """Each approved root with a friendly label and its existing project folders, newest first."""
+        out = []
+        for root in self.cfg.approved_roots:
+            projects = []
+            try:
+                with os.scandir(root) as it:
+                    for e in it:
+                        if e.name.startswith(".") or e.name.startswith("#") or e.name.startswith("@"):
+                            continue
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                projects.append((e.stat(follow_symlinks=False).st_mtime, e.name))
+                        except OSError:
+                            continue
+            except OSError:
+                pass
+            projects.sort(reverse=True)
+            try:
+                st = os.statvfs(root)
+                free = st.f_bavail * st.f_frsize // 1024 ** 3 * 1024 ** 3  # whole GB, so the heartbeat stays steady
+            except OSError:
+                free = None
+            out.append({
+                "free_bytes": free,
+                "root": root,
+                "label": self.cfg.destination_labels.get(root) or os.path.basename(root.rstrip("/")) or root,
+                "projects": [n for _t, n in projects[: self.cfg.max_listed_projects]],
+            })
+        return out
 
     # ---- cards ---------------------------------------------------------
     def _card_by_mount(self, path):
@@ -127,6 +162,27 @@ class Daemon:
     def card_present(self, fingerprint):
         p = self.card_mount_path(fingerprint)
         return bool(p) and os.path.isdir(p)
+
+    def card_role(self, fingerprint):
+        with self.lock:
+            c = self.cards.get(fingerprint)
+            return c.role if c else None
+
+    def _initial_role(self, fp):
+        chosen = self.volume_roles.get(fp)
+        if chosen == "ignore":
+            return "ignored"
+        if chosen == "card" or self.cfg.card_selection == "auto":
+            return "card"
+        return "unassigned"
+
+    def _start_volume(self, card):
+        """Publish what the desktop needs for this volume; only a card is listed and hashed."""
+        if card.role == "card":
+            self.scan_pool.submit(self._build_manifest, card)
+        else:
+            card.manifest = manifest_mod.volume_stub(card.mount, card.fingerprint, card.source, card.role)
+            self._publish_manifest(card)
 
     def _scan_cards(self):
         added, removed = self.detector.poll()
@@ -144,13 +200,17 @@ class Daemon:
             fp, src = detect.card_fingerprint(self.cfg, m, self.serial_resolver)
             if fp in self.cfg.known_server_volume_serials:
                 continue
-            card = _Card(m, fp, src)
+            card = _Card(m, fp, src, self._initial_role(fp))
             with self.lock:
                 self.cards[fp] = card
-            log.info("card detected: %s (%s) at %s", fp, src, m.path)
-            self.scan_pool.submit(self._build_manifest, card)
+            log.info("USB volume detected: %s (%s, %s) at %s", fp, src, card.role, m.path)
+            self._start_volume(card)
 
     def _publish_manifest(self, card):
+        with self.lock:
+            current = self.cards.get(card.fingerprint)
+        if current is not None and current is not card:
+            return  # superseded (the user changed this volume's role mid-scan)
         write_json_atomic(os.path.join(self.cfg.cards_dir, card.fingerprint + ".json"),
                           manifest_mod.public_view(card.manifest))
 
@@ -160,6 +220,9 @@ class Daemon:
             card.manifest = manifest_mod.build_listing(
                 self.cfg, self.profiles, card.mount, card.fingerprint, card.source, record, time.time())
             self._publish_manifest(card)
+            stop = lambda: card.stop.is_set() or self.stop_event.is_set()
+            thumbs.fill_thumbnails(self.cfg, card.mount.path, card.manifest,
+                                   publish=lambda m: self._publish_manifest(card), should_stop=stop)
             cache = self.card_store.hash_cache(card.fingerprint)
             cache = manifest_mod.fill_checksums(
                 self.cfg, card.mount, card.manifest, cache,
@@ -192,6 +255,8 @@ class Daemon:
             name = os.path.basename(p)
             if name.endswith(".clear.json"):
                 self._handle_clear_file(p, name[: -len(".clear.json")])
+            elif name.endswith(".select.json"):
+                self._handle_select_file(p, name[: -len(".select.json")])
             else:
                 self._handle_ticket_file(p, name[: -len(".json")])
 
@@ -237,6 +302,9 @@ class Daemon:
         if existing and existing["state"] in ("done", "failed"):
             return self._move_processed(path)  # already finished; just tidy up
 
+        role = self.card_role(ticket.fingerprint)
+        if role in ("unassigned", "ignored"):
+            return self._reject(path, tid, "USB volume %s is not marked as a card" % ticket.fingerprint)
         if not self.card_present(ticket.fingerprint):
             msg = "waiting for card %s to be inserted" % ticket.fingerprint
             if self._last_msg.get(tid) != msg:
@@ -258,6 +326,8 @@ class Daemon:
             runner = JobRunner(self.cfg, self.profiles, self.jobs, self.status, self.card_store, ticket, mount,
                                lambda: self.card_present(ticket.fingerprint))
             runner.should_stop = self.stop_event.is_set
+            published = read_json(os.path.join(self.cfg.cards_dir, ticket.fingerprint + ".json")) or {}
+            runner.card_label = (published.get("card") or {}).get("label")
             outcome = runner.run()
             if outcome in ("done", "failed"):
                 self._move_processed(path)
@@ -271,6 +341,48 @@ class Daemon:
             self.status.write(tid, "in_progress", message="internal error; will retry (see daemon log)")
         finally:
             self.inflight.discard(tid)
+
+    # ---- volume selection ----------------------------------------------
+    def _handle_select_file(self, path, name_id):
+        """`<fingerprint>.select.json` from the desktop: {"type": "volume_select", "fingerprint", "role"}."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (ValueError, UnicodeDecodeError):
+            try:
+                if time.time() - os.stat(path).st_mtime < PARTIAL_TICKET_GRACE:
+                    return
+            except OSError:
+                return
+            return self._move_processed(path)
+        except OSError:
+            return
+        if not isinstance(raw, dict):
+            raw = {}
+        fp, role = raw.get("fingerprint"), raw.get("role")
+        origin = raw.get("origin") if isinstance(raw.get("origin"), dict) else {}
+        if raw.get("type") != "volume_select" or fp != name_id or role not in VolumeRoles.ROLES:
+            log.warning("bad volume selection %s", name_id)
+            return self._move_processed(path)
+        try:
+            self.volume_roles.set(fp, role, origin)
+        except ValueError:
+            log.warning("bad volume selection %s", name_id)
+            return self._move_processed(path)
+        log.info("volume %s marked %s by %s", fp, role, origin)
+        self._move_processed(path)
+        with self.lock:
+            card = self.cards.get(fp)
+        if card is None:
+            return  # remembered for the next time it is inserted
+        new_role = "card" if role == "card" else "ignored"
+        if new_role == card.role:
+            return
+        card.stop.set()
+        with self.lock:
+            fresh = _Card(card.mount, fp, card.source, new_role)
+            self.cards[fp] = fresh
+        self._start_volume(fresh)
 
     # ---- clear confirmations ------------------------------------------
     def _handle_clear_file(self, path, name_id):

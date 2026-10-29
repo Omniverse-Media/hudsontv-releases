@@ -28,6 +28,7 @@ class Env:
             "removable_mount_prefixes": [self.usb],
             "poll_interval_seconds": 0.01,
             "probe_duration": False,
+            "thumbnails": False,
             "pause_retry_seconds": 0,
         }
         d.update(self.cfg_overrides)

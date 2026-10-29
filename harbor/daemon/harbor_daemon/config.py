@@ -17,6 +17,10 @@ class Config:
         default_factory=lambda: ["exfat", "vfat", "msdos", "ntfs", "fuseblk", "ext4", "ext3", "hfsplus", "udf"]
     )
     known_server_volume_serials: list = field(default_factory=list)
+    # "auto": every detected USB volume is scanned as a card.
+    # "ask": a new volume is only listed (no file walk, no checksums) until the user marks it
+    # as a card in the desktop app. Use this when permanent USB drives share the prefix.
+    card_selection: str = "auto"
     poll_interval_seconds: float = 2.0
     serial_command: str = ""  # optional, e.g. "blkid -s UUID -o value {device}"
 
@@ -30,6 +34,13 @@ class Config:
         ]
     )
     probe_duration: bool = True
+    thumbnails: bool = True
+    thumbnail_width: int = 360
+    thumbnail_timeout_seconds: float = 20.0
+
+    # Shown in the desktop instead of the container path, e.g. {"/projects": "Client Media"}
+    destination_labels: dict = field(default_factory=dict)
+    max_listed_projects: int = 200
 
     # Transfer
     layout: str = "flat"  # "flat" = <subfolder>/<filename>; "preserve" = <subfolder>/<card path>
@@ -37,6 +48,9 @@ class Config:
     max_file_attempts: int = 3
     pause_retry_seconds: float = 30.0
     max_selection: int = 100000
+    min_free_bytes: int = 2 * 1024 ** 3  # headroom kept free on staging and the destination
+    write_mhl: bool = True  # ASC MHL v2 generation per roll (xxh64 only)
+    write_offload_report: bool = True  # <day>/Harbor reports/<roll>.html + .csv
 
     # Card clearing (off unless explicitly enabled; mount the card read-write too)
     allow_clear: bool = False
@@ -60,6 +74,10 @@ class Config:
         return os.path.join(self.harbor_root, "tickets", "cards")
 
     @property
+    def thumbs_dir(self):
+        return os.path.join(self.harbor_root, "tickets", "thumbs")
+
+    @property
     def staging_dir(self):
         return os.path.join(self.harbor_root, "staging")
 
@@ -72,7 +90,7 @@ class Config:
         return os.path.join(self.harbor_root, "state")
 
     def ensure_dirs(self):
-        for d in (self.incoming_dir, self.status_dir, self.processed_dir, self.cards_dir,
+        for d in (self.incoming_dir, self.status_dir, self.processed_dir, self.cards_dir, self.thumbs_dir,
                   self.staging_dir, self.logs_dir, self.state_dir):
             os.makedirs(d, exist_ok=True)
 
@@ -87,6 +105,8 @@ def from_dict(data):
     if unknown:
         raise ConfigError("unknown config keys: %s" % ", ".join(sorted(unknown)))
     cfg = Config(**data)
+    if cfg.card_selection not in ("auto", "ask"):
+        raise ConfigError("card_selection must be 'auto' or 'ask'")
     if cfg.layout not in ("flat", "preserve"):
         raise ConfigError("layout must be 'flat' or 'preserve'")
     from .hashing import SUPPORTED
