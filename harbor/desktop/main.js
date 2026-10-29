@@ -76,7 +76,7 @@ function setupIpc() {
 
   ipcMain.handle('harbor:saveSettings', (_e, patch) => {
     const allowed = {};
-    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot']) if (k in patch) allowed[k] = patch[k];
+    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups']) if (k in patch) allowed[k] = patch[k];
     const s = store.saveSettings(allowed);
     if ('shareRoot' in allowed) poller.tick();
     return s;
@@ -95,13 +95,15 @@ function setupIpc() {
     const ticket = buildTicket({
       manifest, selected: withSidecars(manifest.files, req.selected), projectName: req.projectName, approvedRoot: req.approvedRoot,
       subfolderMap: req.subfolderMap, clearCard: !!req.clearCard && !!(latest.daemon.info && latest.daemon.info.allow_clear),
-      origin: origin(),
+      origin: origin(), dit: req.dit || null,
     });
     share.submitTicket(root, ticket);
-    store.saveSettings({ lastRoot: req.approvedRoot, subfolderMap: ticket.destination.subfolder_map });
+    const patch = { lastRoot: req.approvedRoot, subfolderMap: ticket.destination.subfolder_map };
+    if (req.dit) patch.cardGroups = { ...store.settings().cardGroups, [req.fingerprint]: req.dit.group };
+    store.saveSettings(patch);
     store.addHistory({
       ticket_id: ticket.ticket_id, project: ticket.destination.project_name, fingerprint: req.fingerprint,
-      cardLabel: manifest.card.label, files: ticket.selection.length,
+      cardLabel: manifest.card.label, files: ticket.selection.length, group: req.dit ? req.dit.group : null,
       bytes: ticket.selection.reduce((a, f) => a + f.size, 0), created_at: ticket.created_at,
     });
     poller.watch(ticket.ticket_id);

@@ -111,7 +111,16 @@ test('poller emits card appearance (notify only after first scan), removal and s
   p.tick();
   const cardEvents = events.filter((e) => e[0] === 'card');
   assert.equal(cardEvents[cardEvents.length - 1][1].isNew, true); // re-insert notifies again
-  fs.unlinkSync(path.join(cards, 'ABCD-1234.json'));
+  const manifestPath = path.join(cards, 'ABCD-1234.json');
+  const saved = fs.readFileSync(manifestPath);
+  fs.unlinkSync(manifestPath);
+  p.tick(); // a manifest briefly unreadable mid-rewrite must not drop the card
+  fs.writeFileSync(manifestPath, saved);
+  p.tick();
+  assert.ok(!events.some((e) => e[0] === 'card-gone'));
+  fs.unlinkSync(manifestPath);
+  p.tick(); p.tick();
+  assert.ok(!events.some((e) => e[0] === 'card-gone'));
   p.tick();
   assert.ok(events.some((e) => e[0] === 'card-gone'));
 
@@ -180,4 +189,17 @@ test('withSidecars adds the metadata that belongs to a selected clip', () => {
     { relative_path: 'CLIP/C2M01.XML', kind: 'sidecar', sidecar_of: 'CLIP/C2.MP4' },
   ];
   assert.deepEqual(withSidecars(files, ['CLIP/C1.MP4']), ['CLIP/C1.MP4', 'CLIP/C1M01.XML']);
+});
+
+test('DIT rolls: group prefixes, day folder and ticket spec', () => {
+  const { rollPrefix, dayFolder } = require('../core/logic');
+  assert.equal(rollPrefix('Camera A'), 'A');
+  assert.equal(rollPrefix('Camera 2'), '2');
+  assert.equal(rollPrefix('Audio 1'), 'S');
+  assert.equal(rollPrefix('drone'), 'D');
+  assert.equal(dayFolder('2026-10-29T23:10:00'), '2026-10-29');
+  const t = buildTicket(base(manifest(), { dit: { day: '2026-10-29', group: 'Camera B' } }));
+  assert.deepEqual(t.destination.dit, { day: '2026-10-29', group: 'Camera B', roll_prefix: 'B' });
+  assert.throws(() => buildTicket(base(manifest(), { dit: { day: '2026-10-29', group: '../x' } })), /Group/);
+  assert.equal(buildTicket(base(manifest())).destination.dit, undefined);
 });

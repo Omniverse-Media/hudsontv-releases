@@ -1,8 +1,8 @@
 'use strict';
 const crypto = require('node:crypto');
-const { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified } = require('./logic');
+const { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified, rollPrefix } = require('./logic');
 
-function buildTicket({ manifest, selected, projectName, approvedRoot, subfolderMap, clearCard, origin, now = new Date() }) {
+function buildTicket({ manifest, selected, projectName, approvedRoot, subfolderMap, clearCard, origin, dit = null, now = new Date() }) {
   const err = checkProjectName(projectName);
   if (err) throw new Error(err);
   if (!approvedRoot) throw new Error('Choose a destination root.');
@@ -16,6 +16,16 @@ function buildTicket({ manifest, selected, projectName, approvedRoot, subfolderM
     selection.push({ relative_path: f.relative_path, size: f.size, checksum: f.checksum });
   }
   if (!selection.length) throw new Error('Select at least one file.');
+  let ditSpec;
+  if (dit) {
+    const day = (dit.day || '').trim();
+    const group = (dit.group || '').trim();
+    for (const [what, v] of [['Day folder', day], ['Group', group]]) {
+      const e = checkProjectName(v);
+      if (e) throw new Error(`${what}: ${e.replace('Project name', what).replace('Enter a project name.', 'is empty.')}`);
+    }
+    ditSpec = { day, group, roll_prefix: rollPrefix(group) };
+  }
   return {
     ticket_id: crypto.randomUUID(),
     created_at: now.toISOString(),
@@ -25,6 +35,7 @@ function buildTicket({ manifest, selected, projectName, approvedRoot, subfolderM
       project_name: projectName.trim(),
       approved_root: approvedRoot,
       subfolder_map: sanitizeSubfolders(subfolderMap),
+      ...(ditSpec ? { dit: ditSpec } : {}),
     },
     selection,
     operation: { copy: true, verify: true, clear_card: !!clearCard },

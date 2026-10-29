@@ -1,6 +1,8 @@
 'use strict';
 const share = require('./share');
 
+const MISSES_BEFORE_GONE = 3;
+
 // Polls the share (inotify/FSEvents are unreliable over SMB) and emits changes.
 class Poller {
   constructor(getShareRoot, emit, intervalMs = 2000) {
@@ -8,6 +10,7 @@ class Poller {
     this.emit = emit;
     this.intervalMs = intervalMs;
     this.cards = new Map(); // fingerprint -> signature string
+    this.misses = new Map(); // fingerprint -> consecutive polls without a readable manifest
     this.watched = new Map(); // ticketId -> last status JSON string
     this.timer = null;
     this.shareOk = null;
@@ -45,7 +48,13 @@ class Poller {
         this.emit('card', { manifest: m, isNew: isNew && !this.firstScan && m.present });
       }
     }
-    for (const fp of [...this.cards.keys()]) if (!seen.has(fp)) { this.cards.delete(fp); this.emit('card-gone', fp); }
+    // Over SMB a manifest being replaced can read as missing for a moment: only drop a card that stays gone.
+    for (const fp of [...this.cards.keys()]) {
+      if (seen.has(fp)) { this.misses.delete(fp); continue; }
+      const n = (this.misses.get(fp) || 0) + 1;
+      this.misses.set(fp, n);
+      if (n >= MISSES_BEFORE_GONE) { this.cards.delete(fp); this.misses.delete(fp); this.emit('card-gone', fp); }
+    }
     this.firstScan = false;
 
     for (const [id, last] of this.watched) {

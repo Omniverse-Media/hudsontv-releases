@@ -104,7 +104,7 @@ button.small { padding: 4px 10px; font-size: 12px; }
 .extras { margin-top: 20px; }
 .extras ul { list-style: none; padding: 0; margin: 8px 0; font-size: 13px; }
 .extras li { padding: 3px 0; word-break: break-all; }
-.ingestbar { position: sticky; bottom: -18px; margin: 0 -22px -18px; margin-top: auto; padding: 12px 22px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(0,0,0,.08); z-index: 2; }
+.ingestbar { position: sticky; bottom: -18px; margin: 0 -22px -18px; margin-top: auto; padding: 10px 22px 12px; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(0,0,0,.08); z-index: 2; }
 .ingestbar .sel { min-width: 180px; }
 .ingestbar .sel .t { font-weight: 700; }
 .ingestbar .sel .meta { margin: 0; }
@@ -112,3 +112,11 @@ button.small { padding: 4px 10px; font-size: 12px; }
 .ingestbar .field.grow { flex: 1; min-width: 200px; }
 .ingestbar .field input[type=text], .ingestbar .field select { font-size: 14px; color: var(--text); }
 .ingestbar #btn-ingest { padding: 9px 22px; font-size: 15px; }
+
+.ingestbar .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.ditrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.ditrow .chips button { padding: 5px 11px; font-size: 13px; }
+.ditrow .addgroup { width: 120px; padding: 5px 8px; font-size: 13px; }
+.ditrow .inline { font-size: 13px; color: var(--muted); }
+.ditrow .day { width: 120px; padding: 5px 8px; font-size: 13px; }
+.ditrow .meta { margin: 0; }

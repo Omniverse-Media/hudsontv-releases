@@ -14,8 +14,8 @@ import time
 
 from . import hashing
 from .pathsafe import PathError
-from .state import now_iso
-from .ticket import TicketError, bind_to_card, destination_dir
+from .state import RollBook, now_iso
+from .ticket import TicketError, bind_to_card, destination_dir, group_dir
 
 # Weights for the progress bar: copy, verify, handoff.
 _W_COPY, _W_VERIFY, _W_STAGE = 0.45, 0.45, 0.10
@@ -66,6 +66,8 @@ class JobRunner:
             "started_at": now_iso(),
             "finished_at": None,
             "files": {},
+            "dit": self.ticket.dit,
+            "dit_roll": self._assign_roll() if self.ticket.dit else None,
         }
         for i, item in enumerate(self.ticket.selection):
             j["files"][item.relative_path] = {
@@ -88,6 +90,21 @@ class JobRunner:
                        project=self.ticket.project_name, files=len(self.ticket.selection),
                        checksum_algorithm=self.algo)
         return j
+
+    def _assign_roll(self):
+        t = self.ticket
+        try:
+            gdir = group_dir(t)
+            existing = os.listdir(gdir) if os.path.isdir(gdir) else []
+        except (PathError, OSError):
+            existing = []
+        return RollBook(self.cfg.state_dir).assign(t.approved_root, t.project_name, t.dit["day"], t.dit["group"],
+                                                   t.dit["roll_prefix"], t.fingerprint, existing)
+
+    def _dest_dir(self, rel, f):
+        keep_tree = self.cfg.layout == "preserve" or self.ticket.dit
+        return destination_dir(self.ticket, f["media_type"], os.path.dirname(rel) if keep_tree else "",
+                               roll=self.journal.get("dit_roll"))
 
     def _save(self):
         self.jobs.save(self.journal)
@@ -273,14 +290,12 @@ class JobRunner:
             self._save()
             return
         try:
-            ddir = destination_dir(self.ticket, f["media_type"],
-                                   os.path.dirname(rel) if self.cfg.layout == "preserve" else "")
+            ddir = self._dest_dir(rel, f)
         except (PathError, KeyError) as e:
             raise FileFailed("destination invalid at handoff: %s" % e)
         os.makedirs(ddir, exist_ok=True)
         # Re-resolve after makedirs: a symlink swapped in since validation must not escape.
-        ddir = destination_dir(self.ticket, f["media_type"],
-                               os.path.dirname(rel) if self.cfg.layout == "preserve" else "")
+        ddir = self._dest_dir(rel, f)
 
         name = os.path.basename(rel)
         final, dedup = self._choose_name(ddir, name, f["src_checksum"], f["size"])
@@ -354,6 +369,7 @@ class JobRunner:
             "origin": self.ticket.origin,
             "project": self.ticket.project_name,
             "approved_root": self.ticket.approved_root,
+            "dit": dict(j["dit"], roll=j["dit_roll"]) if j.get("dit") else None,
             "checksum_algorithm": self.algo,
             "started_at": j["started_at"],
             "finished_at": j["finished_at"],

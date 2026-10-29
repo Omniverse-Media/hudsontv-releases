@@ -53,5 +53,22 @@
     return files.filter((f) => want.has(f.relative_path)).map((f) => f.relative_path);
   }
 
-  return { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified, withSidecars };
+  // DIT roll prefix for a group: "Camera B" -> "B", "Audio 2" -> "S" (sound roll), "Drone" -> "D".
+  function rollPrefix(group) {
+    const g = (group || '').trim();
+    if (/^(audio|sound)\b/i.test(g)) return 'S';
+    const cam = g.match(/^(?:camera|cam)\s*([A-Za-z0-9]{1,2})$/i);
+    if (cam) return cam[1].toUpperCase();
+    const c = g.replace(/[^A-Za-z0-9]/g, '');
+    return (c[0] || 'R').toUpperCase();
+  }
+
+  // Local calendar day of an ISO timestamp, as the day folder name (2026-04-29).
+  function dayFolder(iso) {
+    const d = new Date(iso);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  return { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified, withSidecars, rollPrefix, dayFolder };
 }));

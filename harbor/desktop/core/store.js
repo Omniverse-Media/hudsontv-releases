@@ -10,6 +10,9 @@ const DEFAULTS = {
   user: safeUser(),
   subfolderMap: DEFAULT_SUBFOLDERS,
   lastRoot: '',
+  organize: 'dit', // 'dit' = <project>/<day>/<group>/<roll>/<card folders>; 'simple' = media-type subfolders
+  groups: ['Camera A', 'Camera B', 'Camera C', 'Audio 1', 'Audio 2'],
+  cardGroups: {}, // card fingerprint -> last group it was offloaded as
 };
 
 function safeUser() { try { return os.userInfo().username; } catch (e) { return 'unknown'; } }

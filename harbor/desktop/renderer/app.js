@@ -31,7 +31,7 @@ const isCard = (m) => !m.role || m.role === 'card';
 const viewFor = (m) => ({ kind: isCard(m) ? 'card' : 'volume', id: m.card.fingerprint });
 
 function cardUi(fp) {
-  if (!S.ui.has(fp)) S.ui.set(fp, { scope: null, type: 'all', selected: null, project: '', root: '' });
+  if (!S.ui.has(fp)) S.ui.set(fp, { scope: null, type: 'all', selected: null, project: '', root: '', group: '', day: '', dayEdited: false });
   return S.ui.get(fp);
 }
 
@@ -234,11 +234,22 @@ function renderCard(v, m) {
   updateSummary(m);
 }
 
+// Re-renders reuse the same <img> nodes, so previews do not blink while the card view refreshes.
+const thumbNodes = new Map();
+function thumbImg(src) {
+  let el = thumbNodes.get(src);
+  if (!el) {
+    el = h('img', { src, alt: '', loading: 'lazy', draggable: 'false' });
+    if (thumbNodes.size > 3000) thumbNodes.clear();
+    thumbNodes.set(src, el);
+  }
+  return el;
+}
+
 function tile(fp, f, ui) {
   const on = ui.selected.has(f.relative_path);
   const toggle = () => { on ? ui.selected.delete(f.relative_path) : ui.selected.add(f.relative_path); renderAll(); };
-  const pic = f.thumb
-    ? h('img', { src: `harbor-thumb://card/${encodeURIComponent(fp)}/${encodeURIComponent(f.thumb)}`, alt: '', loading: 'lazy', draggable: 'false' })
+  const pic = f.thumb ? thumbImg(`harbor-thumb://card/${encodeURIComponent(fp)}/${encodeURIComponent(f.thumb)}`)
     : h('div', { class: 'ph ' + f.media_type }, h('span', { class: 'ico' }, TYPE_ICON[f.media_type] || '•'),
       h('span', { class: 'ext' }, (f.relative_path.split('.').pop() || '').toUpperCase()));
   return h('div', { class: 'tile' + (on ? ' on' : '') + (f.recent ? ' recent' : ''), title: f.relative_path, onclick: toggle },
@@ -256,48 +267,91 @@ function destinations() {
   return (info.approved_roots || []).map((r) => ({ root: r, label: r, projects: [] }));
 }
 
+function defaultGroup(m, ui) {
+  const remembered = (S.settings.cardGroups || {})[m.card.fingerprint];
+  if (remembered) return remembered;
+  const groups = S.settings.groups || [];
+  const sel = m.files.filter((f) => ui.selected.has(f.relative_path));
+  const audioOnly = sel.length && sel.every((f) => f.media_type === 'audio');
+  return (audioOnly ? groups.find((g) => /^(audio|sound)/i.test(g)) : groups.find((g) => !/^(audio|sound)/i.test(g))) || groups[0] || 'Camera A';
+}
+
+function defaultDay(m, ui) {
+  const sel = m.files.filter((f) => ui.selected.has(f.relative_path) && isMedia(f));
+  const newest = sel.reduce((a, f) => (!a || f.timestamp > a ? f.timestamp : a), null);
+  return window.HarborLogic.dayFolder(newest || new Date().toISOString());
+}
+
 function ingestBar(m, ui) {
   const dests = destinations();
   if (!dests.some((d) => d.root === ui.root)) ui.root = (dests.find((d) => d.root === S.settings.lastRoot) || dests[0] || {}).root || '';
   const dest = dests.find((d) => d.root === ui.root) || { label: '', projects: [] };
+  const dit = S.settings.organize !== 'simple';
+  if (!ui.group) ui.group = defaultGroup(m, ui);
+  if (!ui.dayEdited) ui.day = defaultDay(m, ui);
   const listId = 'projects-' + m.card.fingerprint.replace(/[^A-Za-z0-9_-]/g, '_');
   const project = h('input', { type: 'text', list: listId, placeholder: 'New or existing project folder', value: ui.project, oninput: (e) => { ui.project = e.target.value; updateSummary(m); } });
   const rootSel = h('select', { onchange: (e) => { ui.root = e.target.value; renderAll(); } }, dests.map((d) => h('option', { value: d.root, selected: d.root === ui.root }, d.label)));
   const canClear = !!(S.daemon.info && S.daemon.info.allow_clear);
-  return h('div', { class: 'ingestbar' },
-    h('div', { class: 'sel' }, h('div', { id: 'sum', class: 't' }), h('div', { id: 'where', class: 'meta' })),
-    h('label', { class: 'field' }, h('span', {}, 'Save to'), rootSel),
-    h('label', { class: 'field grow' }, h('span', {}, 'Project'), project, h('datalist', { id: listId }, dest.projects.map((p) => h('option', { value: p })))),
-    canClear ? h('label', { class: 'field' }, h('span', {}, 'Afterwards'), h('label', {}, h('input', { type: 'checkbox', checked: !!ui.clear, onchange: (e) => { ui.clear = e.target.checked; } }), ' Offer to clear card')) : null,
-    h('button', { id: 'btn-ingest', onclick: () => submit(m) }, 'Ingest'));
+  const organize = (val) => { S.settings.organize = val; window.harbor.saveSettings({ organize: val }); renderAll(); };
+
+  const groups = S.settings.groups || [];
+  const addGroup = h('input', { type: 'text', class: 'addgroup', placeholder: '+ Add group', onkeydown: (e) => {
+    if (e.key !== 'Enter') return;
+    const g = e.target.value.trim();
+    if (!g || window.HarborLogic.checkProjectName(g)) return;
+    if (!groups.includes(g)) { S.settings.groups = [...groups, g]; window.harbor.saveSettings({ groups: S.settings.groups }); }
+    ui.group = g; e.target.value = ''; e.target.blur(); renderAll();
+  } });
+  const ditRow = h('div', { class: 'ditrow' },
+    h('span', { class: 'seg' },
+      h('button', { class: dit ? 'on' : '', onclick: () => organize('dit') }, 'DIT rolls'),
+      h('button', { class: dit ? '' : 'on', onclick: () => organize('simple') }, 'By type')),
+    dit ? h('span', { class: 'chips' }, groups.map((g) => h('button', { class: ui.group === g ? 'on' : '', onclick: () => { ui.group = g; renderAll(); } }, g))) : null,
+    dit ? addGroup : null,
+    dit ? h('label', { class: 'inline' }, 'Day ', h('input', { type: 'text', class: 'day', value: ui.day, oninput: (e) => { ui.day = e.target.value; ui.dayEdited = true; updateSummary(m); } })) : null,
+    dit ? null : h('span', { class: 'meta' }, 'Files go into the Video / Audio / Photo subfolders set in Settings.'));
+
+  return h('div', { class: 'ingestbar' }, ditRow,
+    h('div', { class: 'row' },
+      h('div', { class: 'sel' }, h('div', { id: 'sum', class: 't' }), h('div', { id: 'where', class: 'meta' })),
+      h('label', { class: 'field' }, h('span', {}, 'Save to'), rootSel),
+      h('label', { class: 'field grow' }, h('span', {}, 'Project'), project, h('datalist', { id: listId }, dest.projects.map((p) => h('option', { value: p })))),
+      canClear ? h('label', { class: 'field' }, h('span', {}, 'Afterwards'), h('label', {}, h('input', { type: 'checkbox', checked: !!ui.clear, onchange: (e) => { ui.clear = e.target.checked; } }), ' Offer to clear card')) : null,
+      h('button', { id: 'btn-ingest', onclick: () => submit(m) }, 'Ingest')));
 }
 
 function updateSummary(m) {
   const ui = cardUi(m.card.fingerprint);
+  const L = window.HarborLogic;
   const files = m.files.filter((f) => ui.selected.has(f.relative_path));
   const bytes = files.reduce((a, f) => a + f.size, 0);
-  const err = window.HarborLogic.checkProjectName(ui.project);
+  const dit = S.settings.organize !== 'simple';
+  const err = L.checkProjectName(ui.project) || (dit && L.checkProjectName(ui.day) ? 'Enter a day folder name.' : null);
   const btn = $('btn-ingest'); if (!btn) return;
   btn.disabled = !files.length || !!err || m.checksum_state !== 'complete' || !S.daemon.online || !ui.root;
   $('sum').textContent = files.length ? `${files.length} selected · ${fmtBytes(bytes)}` : 'Nothing selected';
   const dest = destinations().find((d) => d.root === ui.root);
   const name = ui.project.trim();
   const exists = dest && dest.projects.includes(name);
-  $('where').textContent = !name ? 'Pick or type a project folder'
-    : err ? err : `${dest ? dest.label : ui.root} › ${name}${exists ? ' (existing)' : ' (new folder)'}`;
+  const base = `${dest ? dest.label : ui.root} › ${name}${exists ? '' : ' (new)'}`;
+  $('where').textContent = !name ? 'Pick or type a project folder' : err ? err
+    : dit ? `${base} › ${ui.day.trim()} › ${ui.group} › next ${L.rollPrefix(ui.group)} roll` : base;
 }
 
 async function submit(m) {
   const ui = cardUi(m.card.fingerprint);
   const btn = $('btn-ingest'); btn.disabled = true;
+  const dit = S.settings.organize !== 'simple' ? { day: ui.day.trim(), group: ui.group } : null;
   try {
     const id = await window.harbor.submit({
       fingerprint: m.card.fingerprint, selected: [...ui.selected], projectName: ui.project,
-      approvedRoot: ui.root, subfolderMap: S.settings.subfolderMap, clearCard: !!ui.clear,
+      approvedRoot: ui.root, subfolderMap: S.settings.subfolderMap, clearCard: !!ui.clear, dit,
     });
-    S.history = (await window.harbor.getState()).history;
+    const st = await window.harbor.getState();
+    S.history = st.history; S.settings = st.settings;
     S.view = { kind: 'job', id };
-    ui.selected = null; ui.project = '';
+    ui.selected = null; ui.dayEdited = false;
     renderAll();
   } catch (e) {
     alertDialog('Could not queue the ingest', String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
