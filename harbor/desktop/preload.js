@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('harbor', {
   submit: (req) => ipcRenderer.invoke('harbor:submit', req),
   confirmClear: (ticketId) => ipcRenderer.invoke('harbor:confirmClear', ticketId),
   openReport: (ticketId) => ipcRenderer.invoke('harbor:openReport', ticketId),
+  setVolumeRole: (fingerprint, role) => ipcRenderer.invoke('harbor:setVolumeRole', fingerprint, role),
   onEvent: (cb) => {
     const fn = (_e, msg) => cb(msg);
     ipcRenderer.on('harbor:event', fn);

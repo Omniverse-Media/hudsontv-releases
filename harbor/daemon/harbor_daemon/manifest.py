@@ -74,6 +74,7 @@ def build_listing(cfg, profiles, mount, fingerprint, fp_source, record, now):
     return {
         "schema": 1,
         "present": True,
+        "role": "card",
         "card": {
             "fingerprint": fingerprint,
             "fingerprint_source": fp_source,
@@ -100,6 +101,38 @@ def _total_bytes(path):
         return st.f_blocks * st.f_frsize
     except OSError:
         return None
+
+
+def _used_bytes(path):
+    try:
+        st = os.statvfs(path)
+        return (st.f_blocks - st.f_bfree) * st.f_frsize
+    except OSError:
+        return None
+
+
+def volume_stub(mount, fingerprint, fp_source, role):
+    """A USB volume the user has not chosen as a card ("unassigned") or has ruled out ("ignored").
+
+    Nothing on it is listed or read: a permanent multi-terabyte drive must not be walked or hashed.
+    """
+    return {
+        "schema": 1,
+        "present": True,
+        "role": role,
+        "card": {
+            "fingerprint": fingerprint,
+            "fingerprint_source": fp_source,
+            "fstype": mount.fstype,
+            "label": os.path.basename(mount.path.rstrip("/")),
+            "mount_path": mount.path,
+            "total_bytes": _total_bytes(mount.path),
+            "used_bytes": _used_bytes(mount.path),
+        },
+        "scanned_at": now_iso(),
+        "checksum_state": "not_scanned",
+        "files": [],
+    }
 
 
 def fill_checksums(cfg, mount, manifest, cache, publish=None, should_stop=lambda: False):

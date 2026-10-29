@@ -55,3 +55,16 @@ def test_desktop_clear_confirm_flow(env):
     d.tick()
     assert env.status(tid)["clear"]["state"] == "cleared"
     assert not os.path.exists(os.path.join(env.card, "PRIVATE/M4ROOT/CLIP/C0001.MP4"))
+
+
+def test_desktop_volume_choice_is_applied(env):
+    env.sony_card()
+    d = env.daemon(card_selection="ask")
+    d.tick()
+    assert env.manifest()["role"] == "unassigned"
+    js = (r"const s=require(process.argv[1]+'/core/share');"
+          r"s.submitVolumeRole(process.argv[2],'ABCD-1234','card',{machine:'m',user:'u'})")
+    subprocess.run(["node", "-e", js, os.path.abspath(DESKTOP), env.root], check=True)
+    d.tick()
+    m = env.manifest()
+    assert m["role"] == "card" and len(m["files"]) == 3

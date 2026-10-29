@@ -35,9 +35,20 @@ when checksums complete (`"complete"`). Wait for `complete` before building a ti
 `present` flips to `false` when the card is removed. Each file has `recent` (see below). A card matching no profile has
 `profile_matched: false`; every file is still listed.
 
+**Roles** (`role` field): `card` (listed and checksummed as above), `unassigned` or `ignored`. With
+`card_selection: "ask"` a newly detected USB volume is published as `unassigned`: `files` is empty, `checksum_state`
+is `not_scanned`, and `card` adds `mount_path` and `used_bytes`. Nothing on it is read until the user picks a role.
+Manifests from older daemons have no `role`; treat them as `card`.
+
 **Recent:** a file is recent when its timestamp is newer than the newest *file* timestamp from the last successful
 ingest of this card (immune to camera/NAS clock differences). For a never-ingested card, files within
 `recent_window_hours` count. `last_ingest_at` (NAS clock) is also published.
+
+## Choosing a role for a USB volume: `incoming/<fingerprint>.select.json`
+`{"type":"volume_select","fingerprint":"…","role":"card"|"ignore","created_at":"…","origin":{…}}`. The file name
+must equal the fingerprint. The daemon remembers the choice in `state/volume_roles.json` and applies it whenever that
+volume is attached: `card` scans it, `ignore` republishes it as `ignored`. Tickets for a volume that is not a card are
+rejected.
 
 ## Status: `status/<ticket_id>.json`
 `state`: `received | in_progress | done | failed`. Per file: `pending | copying | copied | verified | staged | failed`

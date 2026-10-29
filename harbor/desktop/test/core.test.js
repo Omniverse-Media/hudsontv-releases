@@ -146,3 +146,27 @@ test('store persists settings and caps history', () => {
   assert.equal(s.history().length, 100);
   assert.equal(s.history()[0].ticket_id, 't119');
 });
+
+test('submitVolumeRole writes a select request the daemon can read', () => {
+  const root = makeShare();
+  share.submitVolumeRole(root, 'synth-0123abcd', 'ignore', { machine: 'mac', user: 'ed' });
+  const req = JSON.parse(fs.readFileSync(path.join(share.dirs(root).incoming, 'synth-0123abcd.select.json'), 'utf8'));
+  assert.equal(req.type, 'volume_select');
+  assert.equal(req.fingerprint, 'synth-0123abcd');
+  assert.equal(req.role, 'ignore');
+  assert.throws(() => share.submitVolumeRole(root, '../x', 'card', {}), /bad fingerprint/);
+  assert.throws(() => share.submitVolumeRole(root, 'ABCD', 'delete', {}), /bad volume role/);
+});
+
+test('poller re-emits a volume when its role changes', () => {
+  const root = makeShare();
+  const events = [];
+  const p = new Poller(() => root, (t, x) => events.push([t, x]));
+  const file = path.join(share.dirs(root).cards, 'ABCD-1234.json');
+  fs.writeFileSync(file, JSON.stringify(manifest({ role: 'unassigned', files: [], checksum_state: 'not_scanned' })));
+  p.tick();
+  fs.writeFileSync(file, JSON.stringify(manifest({ role: 'ignored', files: [], checksum_state: 'not_scanned' })));
+  p.tick();
+  const roles = events.filter((e) => e[0] === 'card').map((e) => e[1].manifest.role);
+  assert.deepEqual(roles, ['unassigned', 'ignored']);
+});

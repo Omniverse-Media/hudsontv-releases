@@ -13,10 +13,16 @@ services:
       - ./config/harbor.json:/etc/harbor/harbor.json:ro
       - /volume1/harbor:/harbor                        # tickets, staging, logs, state
       - /volume1/Projects:/projects                    # destination (must match approved_roots)
-      - type: bind                                     # USB cards, read-only by default
-        source: /volumeUSB1
-        target: /volumeUSB1
+      # Every USB slot. DSM mounts each USB volume at /volumeUSB<n>, and n changes on replug, so the
+      # whole host filesystem is mounted read-only and the daemon watches /host/volumeUSB*.
+      # The container can read the other shares but cannot write to any of them.
+      - type: bind
+        source: /
+        target: /host
         read_only: true                                # change to false ONLY to enable card clearing
         bind:
           propagation: rslave                          # so cards inserted later appear inside
-      - /dev/disk:/dev/disk:ro                         # volume serial lookup (by-uuid)
+      - /dev:/dev:ro                                   # volume serial lookup (blkid); DSM 7.1 has no /dev/disk
+    device_cgroup_rules:                               # read (not write) access to SCSI/USB block devices
+      - "b 8:* r"
+      - "b 65:* r"

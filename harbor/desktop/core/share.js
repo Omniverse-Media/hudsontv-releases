@@ -6,6 +6,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const FINGERPRINT = /^[A-Za-z0-9._-]{1,64}$/;
+const VOLUME_ROLES = ['card', 'ignore'];
 const DAEMON_STALE_MS = 45_000;
 
 function dirs(shareRoot) {
@@ -90,4 +92,20 @@ function submitClearConfirm(shareRoot, ticketId, token, origin) {
   });
 }
 
-module.exports = { dirs, checkShare, readDaemonInfo, listCards, readStatus, submitTicket, submitClearConfirm, UUID, DAEMON_STALE_MS };
+// Tell the daemon whether a USB volume is a card to ingest from ("card") or part of the server ("ignore").
+function submitVolumeRole(shareRoot, fingerprint, role, origin) {
+  if (!FINGERPRINT.test(fingerprint)) throw new Error('bad fingerprint');
+  if (!VOLUME_ROLES.includes(role)) throw new Error('bad volume role');
+  writeAtomic(dirs(shareRoot).incoming, fingerprint + '.select.json', {
+    type: 'volume_select',
+    fingerprint,
+    role,
+    created_at: new Date().toISOString(),
+    origin,
+  });
+}
+
+module.exports = {
+  dirs, checkShare, readDaemonInfo, listCards, readStatus, submitTicket, submitClearConfirm, submitVolumeRole,
+  UUID, DAEMON_STALE_MS,
+};

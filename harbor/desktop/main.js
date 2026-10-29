@@ -39,7 +39,16 @@ function createWindow() {
 }
 
 function notifyCard(manifest) {
-  if (!Notification.isSupported()) return;
+  if (!Notification.isSupported() || manifest.role === 'ignored') return;
+  if (manifest.role === 'unassigned') {
+    const n = new Notification({
+      title: 'USB drive found on the NAS',
+      body: `${manifest.card.label || manifest.card.fingerprint}: is this a card to ingest? Choose in Harbor.`,
+    });
+    n.on('click', showWindow);
+    n.show();
+    return;
+  }
   const recent = manifest.files.filter((f) => f.recent).length;
   const n = new Notification({
     title: 'Card detected in Harbor',
@@ -106,6 +115,13 @@ function setupIpc() {
     }
     share.submitClearConfirm(root, ticketId, st.clear.token, origin());
     poller.watch(ticketId);
+  });
+
+  ipcMain.handle('harbor:setVolumeRole', (_e, fingerprint, role) => {
+    const root = store.settings().shareRoot;
+    const manifest = share.listCards(root).find((m) => m.card.fingerprint === fingerprint);
+    if (!manifest || !manifest.present) throw new Error('That USB drive is no longer present.');
+    share.submitVolumeRole(root, fingerprint, role, origin());
   });
 
   ipcMain.handle('harbor:openReport', async (_e, ticketId) => {

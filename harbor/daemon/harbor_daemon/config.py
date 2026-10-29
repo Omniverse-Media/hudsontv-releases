@@ -17,6 +17,10 @@ class Config:
         default_factory=lambda: ["exfat", "vfat", "msdos", "ntfs", "fuseblk", "ext4", "ext3", "hfsplus", "udf"]
     )
     known_server_volume_serials: list = field(default_factory=list)
+    # "auto": every detected USB volume is scanned as a card.
+    # "ask": a new volume is only listed (no file walk, no checksums) until the user marks it
+    # as a card in the desktop app. Use this when permanent USB drives share the prefix.
+    card_selection: str = "auto"
     poll_interval_seconds: float = 2.0
     serial_command: str = ""  # optional, e.g. "blkid -s UUID -o value {device}"
 
@@ -87,6 +91,8 @@ def from_dict(data):
     if unknown:
         raise ConfigError("unknown config keys: %s" % ", ".join(sorted(unknown)))
     cfg = Config(**data)
+    if cfg.card_selection not in ("auto", "ask"):
+        raise ConfigError("card_selection must be 'auto' or 'ask'")
     if cfg.layout not in ("flat", "preserve"):
         raise ConfigError("layout must be 'flat' or 'preserve'")
     from .hashing import SUPPORTED

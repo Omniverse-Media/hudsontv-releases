@@ -4,7 +4,8 @@
 const MEDIA = ['video', 'audio', 'photo', 'other'];
 const S = {
   settings: null, history: [], cards: new Map(), daemon: { online: false, info: null }, share: { ok: false },
-  statuses: new Map(), view: null, // {kind:'card'|'job', id}
+  statuses: new Map(), view: null, // {kind:'card'|'volume'|'job', id}
+  pendingRole: new Map(), // fingerprint -> role the user just picked, until the daemon publishes it
   ui: new Map(), // fingerprint -> {showAll, types:Set, selected:Set|null, project, root}
 };
 
@@ -25,6 +26,10 @@ const fmtBytes = (n) => { const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; wh
 const fmtDur = (s) => (s == null ? '' : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`);
 const fmtTime = (iso) => new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
 
+// Older daemons publish no role: everything they publish is a card.
+const isCard = (m) => !m.role || m.role === 'card';
+const viewFor = (m) => ({ kind: isCard(m) ? 'card' : 'volume', id: m.card.fingerprint });
+
 function cardUi(fp) {
   if (!S.ui.has(fp)) S.ui.set(fp, { showAll: false, types: new Set(MEDIA), selected: null, project: '', root: '' });
   return S.ui.get(fp);
@@ -37,16 +42,22 @@ async function init() {
   for (const m of st.cards) S.cards.set(m.card.fingerprint, m);
   window.harbor.onEvent(onEvent);
   $('btn-settings').addEventListener('click', openSettings);
-  const firstCard = [...S.cards.values()].find((m) => m.present);
-  if (firstCard) S.view = { kind: 'card', id: firstCard.card.fingerprint };
+  const present = [...S.cards.values()].filter((m) => m.present && m.role !== 'ignored');
+  const first = present.find(isCard) || present[0];
+  if (first) S.view = viewFor(first);
   if (!S.settings.shareRoot) openSettings();
   renderAll();
 }
 
 function onEvent({ type, payload }) {
   if (type === 'card') {
-    S.cards.set(payload.manifest.card.fingerprint, payload.manifest);
-    if (!S.view) S.view = { kind: 'card', id: payload.manifest.card.fingerprint };
+    const m = payload.manifest;
+    const fp = m.card.fingerprint;
+    S.cards.set(fp, m);
+    if (S.pendingRole.get(fp) === (m.role === 'card' ? 'card' : 'ignore')) S.pendingRole.delete(fp);
+    if (!S.view && m.present && m.role !== 'ignored') S.view = viewFor(m);
+    // A volume the user just marked as a card moves from the drive list to the card list.
+    if (S.view && S.view.id === fp && S.view.kind !== 'job') S.view = viewFor(m);
   } else if (type === 'card-gone') S.cards.delete(payload);
   else if (type === 'daemon') S.daemon = payload;
   else if (type === 'share') S.share = payload;
@@ -69,13 +80,24 @@ function renderAll() {
 
 function renderNav() {
   const cl = $('card-list'); cl.replaceChildren();
-  const cards = [...S.cards.values()].filter((m) => m.present);
+  const present = [...S.cards.values()].filter((m) => m.present);
+  const cards = present.filter(isCard);
   if (!cards.length) cl.append(h('div', { class: 'empty' }, 'No card inserted'));
   for (const m of cards) {
     const recent = m.files.filter((f) => f.recent).length;
     cl.append(h('li', { class: sel('card', m.card.fingerprint), onclick: () => { S.view = { kind: 'card', id: m.card.fingerprint }; renderAll(); } },
       h('div', { class: 't' }, m.card.label || m.card.fingerprint),
       h('div', { class: 's' }, `${recent} new · ${m.files.length} total`)));
+  }
+  const vl = $('volume-list'); vl.replaceChildren();
+  // New drives first: they are waiting for a decision.
+  const volumes = present.filter((m) => !isCard(m)).sort((a, b) => (a.role === 'unassigned' ? 0 : 1) - (b.role === 'unassigned' ? 0 : 1));
+  if (!volumes.length) vl.append(h('div', { class: 'empty' }, 'No other USB drives'));
+  for (const m of volumes) {
+    const ask = m.role === 'unassigned';
+    vl.append(h('li', { class: sel('volume', m.card.fingerprint) + (ask ? ' ask' : ''), onclick: () => { S.view = viewFor(m); renderAll(); } },
+      h('div', { class: 't' }, m.card.label || m.card.fingerprint),
+      h('div', { class: 's' }, `${ask ? 'Card or server drive?' : 'Not a card'}${m.card.total_bytes ? ' · ' + fmtBytes(m.card.total_bytes) : ''}`)));
   }
   const jl = $('job-list'); jl.replaceChildren();
   if (!S.history.length) jl.append(h('div', { class: 'empty' }, 'No jobs yet'));
@@ -98,11 +120,38 @@ function renderView() {
   if (v.contains(document.activeElement) && document.activeElement.type === 'text' && S.view && S.view.kind === 'card') return;
   v.replaceChildren();
   if (!S.view) { v.append(h('div', { class: 'empty' }, 'Insert a card into the NAS USB port. Harbor will notify you when it is detected.')); return; }
-  if (S.view.kind === 'card') {
+  if (S.view.kind === 'card' || S.view.kind === 'volume') {
     const m = S.cards.get(S.view.id);
     if (!m || !m.present) { v.append(h('div', { class: 'empty' }, 'This card is no longer inserted.')); return; }
-    renderCard(v, m);
+    if (isCard(m)) renderCard(v, m); else renderVolume(v, m);
   } else renderJob(v, S.view.id);
+}
+
+// ---------- USB drive view (not yet a card, or ruled out) ----------
+function renderVolume(v, m) {
+  const c = m.card;
+  const fp = c.fingerprint;
+  const pending = S.pendingRole.get(fp);
+  v.append(h('h2', {}, c.label || fp));
+  const size = c.total_bytes ? `${fmtBytes(c.used_bytes || 0)} used of ${fmtBytes(c.total_bytes)}` : 'size unknown';
+  v.append(h('div', { class: 'meta' }, `${size} · ${c.fstype || 'unknown format'} · ${c.mount_path || ''} · ${fp}`));
+  if (m.role === 'unassigned') {
+    v.append(h('div', { class: 'note warn' }, 'The NAS found this USB drive. Is it a card (or card reader) to ingest from, or a drive that is part of the server? Harbor has not read anything on it yet and will remember your choice.'));
+  } else {
+    v.append(h('div', { class: 'note' }, 'You marked this drive as not a card. Harbor ignores it whenever it is attached.'));
+  }
+  if (pending) { v.append(h('div', { class: 'note' }, 'Waiting for the NAS to apply your choice…')); return; }
+  v.append(h('div', { class: 'toolbar' },
+    h('button', { onclick: () => chooseRole(fp, 'card') }, 'Use as card'),
+    m.role === 'unassigned' ? h('button', { class: 'ghost', onclick: () => chooseRole(fp, 'ignore') }, 'Not a card') : null));
+}
+
+async function chooseRole(fp, role) {
+  S.pendingRole.set(fp, role); renderAll();
+  try { await window.harbor.setVolumeRole(fp, role); } catch (e) {
+    S.pendingRole.delete(fp); renderAll();
+    alertDialog('Could not save your choice', String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+  }
 }
 
 // ---------- card view ----------
@@ -114,7 +163,9 @@ function renderCard(v, m) {
   const roots = (S.daemon.info && S.daemon.info.approved_roots) || [];
   if (!ui.root) ui.root = roots.includes(S.settings.lastRoot) ? S.settings.lastRoot : roots[0] || '';
 
-  v.append(h('h2', {}, m.card.label || m.card.fingerprint));
+  v.append(h('div', { class: 'titlebar' }, h('h2', {}, m.card.label || m.card.fingerprint),
+    // Only daemons that publish a role understand role changes.
+    m.role ? h('button', { class: 'ghost', disabled: S.pendingRole.has(m.card.fingerprint), onclick: () => chooseRole(m.card.fingerprint, 'ignore') }, 'Not a card') : null));
   v.append(h('div', { class: 'meta' }, `Card ${m.card.fingerprint} · ${m.profiles_matched.join(', ') || 'unknown structure'} · ${m.last_ingest_at ? 'last ingested ' + fmtTime(m.last_ingest_at) : 'never ingested'}`));
   if (!m.profile_matched) v.append(h('div', { class: 'note warn' }, 'Unknown card structure. Harbor is showing every file on the card so nothing is missed. Check the file types below.'));
   if (m.card.fingerprint_source === 'synthesized') v.append(h('div', { class: 'note warn' }, 'This card has no readable volume serial, so its identity is estimated. "New file" tracking may be less reliable.'));

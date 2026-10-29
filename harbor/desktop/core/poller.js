@@ -36,7 +36,7 @@ class Poller {
     for (const m of share.listCards(root)) {
       const fp = m.card.fingerprint;
       seen.add(fp);
-      const sig = [m.present, m.checksum_state, m.scanned_at, Math.round((m.checksum_progress || 0) * 100), m.files.length].join('|');
+      const sig = [m.present, m.role, m.checksum_state, m.scanned_at, Math.round((m.checksum_progress || 0) * 100), m.files.length].join('|');
       const prev = this.cards.get(fp);
       if (prev !== sig) {
         this.cards.set(fp, sig);

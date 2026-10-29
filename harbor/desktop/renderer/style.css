@@ -36,6 +36,8 @@ nav h3 { margin: 10px 4px 6px; font-size: 11px; text-transform: uppercase; lette
 .list li { padding: 8px 10px; border-radius: 8px; cursor: pointer; }
 .list li:hover { background: var(--bg); }
 .list li.sel { background: var(--bg); outline: 1px solid var(--accent); }
+.list li.ask .s { color: var(--warn); font-weight: 600; }
+.titlebar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .list .t { font-weight: 600; } .list .s { font-size: 12px; color: var(--muted); }
 .empty { color: var(--muted); padding: 8px 10px; font-size: 13px; }
 section#view { flex: 1; overflow: auto; padding: 18px 22px; min-width: 0; }

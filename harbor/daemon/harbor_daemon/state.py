@@ -47,6 +47,27 @@ class CardStore:
         write_json_atomic(self._path(fp, ".hashes"), cache)
 
 
+class VolumeRoles:
+    """The user's choice per USB volume fingerprint: "card" (scan it) or "ignore" (part of the server)."""
+
+    ROLES = ("card", "ignore")
+
+    def __init__(self, state_dir):
+        self.path = os.path.join(state_dir, "volume_roles.json")
+        self._lock = threading.Lock()
+
+    def get(self, fp):
+        return (read_json(self.path, {}).get(fp) or {}).get("role")
+
+    def set(self, fp, role, origin=None):
+        if role not in self.ROLES or not _ID.match(fp):
+            raise ValueError("bad volume role")
+        with self._lock:
+            data = read_json(self.path, {})
+            data[fp] = {"role": role, "set_at": now_iso(), "origin": origin or {}}
+            write_json_atomic(self.path, data)
+
+
 class JobStore:
     """Per-ticket journal: the source of truth for resuming an interrupted job."""
 

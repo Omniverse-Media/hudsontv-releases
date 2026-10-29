@@ -1,7 +1,8 @@
 {
   "harbor_root": "/harbor",
   "approved_roots": ["/projects"],
-  "removable_mount_prefixes": ["/volumeUSB"],
+  "removable_mount_prefixes": ["/host/volumeUSB"],
+  "card_selection": "ask",
   "checksum_algorithm": "xxh64",
   "recent_window_hours": 72,
   "layout": "flat",
