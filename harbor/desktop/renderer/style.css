@@ -139,3 +139,6 @@ dialog.player .scrub { flex: 1; }
 dialog.player .time { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 92px; text-align: right; }
 dialog.player .look { font-size: 12px; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 dialog.player > .meta { margin-top: 6px; min-height: 1em; }
+.ingestbar .space { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.ingestbar .space.low { color: #b54708; }
+.ingestbar .space.bad { color: #b42318; font-weight: 700; }

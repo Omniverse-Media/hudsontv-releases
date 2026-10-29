@@ -56,3 +56,48 @@ def test_dit_fields_are_validated(env):
         env.submit(t)
         d.tick()
         assert env.status(t["ticket_id"])["state"] == "failed"
+
+
+def test_offload_writes_asc_mhl_and_report(env):
+    import xml.etree.ElementTree as ET
+    import xxhash
+    env.sony_card()
+    d = env.daemon()
+    d.tick()
+    first = dit_ticket(env, rels=["PRIVATE/M4ROOT/CLIP/C0001.MP4"])
+    env.submit(first)
+    d.tick()
+    second = dit_ticket(env, rels=["PRIVATE/M4ROOT/CLIP/C0002.MP4"])
+    env.submit(second)
+    d.tick()
+    roll = os.path.join(env.projects, "ShootA", "2026-04-29", "Camera A", "A001")
+    mhls = sorted(n for n in os.listdir(os.path.join(roll, "ascmhl")) if n.endswith(".mhl"))
+    assert [n[:5] for n in mhls] == ["0001_", "0002_"] and all("_A001_" in n for n in mhls)
+    ns = {"m": "urn:ASC:MHL:v2.0"}
+    h = ET.parse(os.path.join(roll, "ascmhl", mhls[0])).getroot().find("m:hashes/m:hash", ns)
+    rel = h.find("m:path", ns).text
+    assert rel == "PRIVATE/M4ROOT/CLIP/C0001.MP4"
+    with open(os.path.join(roll, *rel.split("/")), "rb") as fh:
+        assert h.find("m:xxh64", ns).text == xxhash.xxh64(fh.read()).hexdigest()
+    chain = ET.parse(os.path.join(roll, "ascmhl", "ascmhl_chain.xml")).getroot()
+    gens = chain.findall("{urn:ASC:MHL:DIRECTORY:v2.0}hashlist")
+    assert [g.get("sequencenr") for g in gens] == ["1", "2"] and all(g[1].text.startswith("c4") and len(g[1].text) == 90 for g in gens)
+
+    reports = os.listdir(os.path.join(env.projects, "ShootA", "2026-04-29", "Harbor reports"))
+    assert sorted(n.rsplit(".", 1)[1] for n in reports) == ["csv", "csv", "html", "html"]
+    page = open(os.path.join(env.projects, "ShootA", "2026-04-29", "Harbor reports", [n for n in reports if n.endswith(".html")][0])).read()
+    assert "ALL FILES VERIFIED" in page and "A001" in page
+    with open(os.path.join(env.cfg().logs_dir, first["ticket_id"] + ".report.json")) as f:
+        assert json.load(f)["mhl"].startswith("2026-04-29/Camera A/A001/ascmhl/0001_")
+
+
+def test_ingest_that_does_not_fit_is_refused_up_front(env):
+    env.sony_card()
+    d = env.daemon(min_free_bytes=1 << 60)
+    d.tick()
+    t = dit_ticket(env)
+    env.submit(t)
+    d.tick()
+    st = env.status(t["ticket_id"])
+    assert st["state"] == "failed" and "not enough space" in st["error"]
+    assert not os.path.exists(os.path.join(env.projects, "ShootA"))

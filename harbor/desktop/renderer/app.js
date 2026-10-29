@@ -323,7 +323,7 @@ function ingestBar(m, ui) {
   return h('div', { class: 'ingestbar' }, ditRow,
     h('div', { class: 'row' },
       h('div', { class: 'sel' }, h('div', { id: 'sum', class: 't' }), h('div', { id: 'where', class: 'meta' })),
-      h('label', { class: 'field' }, h('span', {}, 'Save to'), rootSel),
+      h('label', { class: 'field' }, h('span', {}, 'Save to'), rootSel, h('span', { id: 'space', class: 'space' })),
       h('label', { class: 'field grow' }, h('span', {}, 'Project'), project, h('datalist', { id: listId }, dest.projects.map((p) => h('option', { value: p })))),
       canClear ? h('label', { class: 'field' }, h('span', {}, 'Afterwards'), h('label', {}, h('input', { type: 'checkbox', checked: !!ui.clear, onchange: (e) => { ui.clear = e.target.checked; } }), ' Offer to clear card')) : null,
       h('button', { id: 'btn-ingest', onclick: () => submit(m) }, 'Ingest')));
@@ -337,9 +337,16 @@ function updateSummary(m) {
   const dit = S.settings.organize !== 'simple';
   const err = L.checkProjectName(ui.project) || (dit && L.checkProjectName(ui.day) ? 'Enter a day folder name.' : null);
   const btn = $('btn-ingest'); if (!btn) return;
-  btn.disabled = !files.length || !!err || m.checksum_state !== 'complete' || !S.daemon.online || !ui.root;
-  $('sum').textContent = files.length ? `${files.length} selected · ${fmtBytes(bytes)}` : 'Nothing selected';
   const dest = destinations().find((d) => d.root === ui.root);
+  const free = dest && Number.isFinite(dest.free_bytes) ? dest.free_bytes : null;
+  const tooBig = free != null && bytes + 2 * 1024 ** 3 > free;
+  btn.disabled = !files.length || !!err || tooBig || m.checksum_state !== 'complete' || !S.daemon.online || !ui.root;
+  $('sum').textContent = files.length ? `${files.length} selected · ${fmtBytes(bytes)}` : 'Nothing selected';
+  const space = $('space');
+  if (space) {
+    space.textContent = free == null ? '' : tooBig ? `Won't fit: ${fmtBytes(free)} free on ${dest.label}` : `${fmtBytes(free)} free`;
+    space.className = 'space' + (tooBig ? ' bad' : free != null && free < 500 * 1024 ** 3 ? ' low' : '');
+  }
   const name = ui.project.trim();
   const exists = dest && dest.projects.includes(name);
   const base = `${dest ? dest.label : ui.root} › ${name}${exists ? '' : ' (new)'}`;

@@ -10,7 +10,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__, clear, detect, manifest as manifest_mod, thumbs
-from .atomicio import write_json_atomic
+from .atomicio import read_json, write_json_atomic
 from .config import Config
 from .joblog import JobLog
 from .profiles import ProfileSet, load_profiles
@@ -136,7 +136,13 @@ class Daemon:
             except OSError:
                 pass
             projects.sort(reverse=True)
+            try:
+                st = os.statvfs(root)
+                free = st.f_bavail * st.f_frsize // 1024 ** 3 * 1024 ** 3  # whole GB, so the heartbeat stays steady
+            except OSError:
+                free = None
             out.append({
+                "free_bytes": free,
                 "root": root,
                 "label": self.cfg.destination_labels.get(root) or os.path.basename(root.rstrip("/")) or root,
                 "projects": [n for _t, n in projects[: self.cfg.max_listed_projects]],
@@ -320,6 +326,8 @@ class Daemon:
             runner = JobRunner(self.cfg, self.profiles, self.jobs, self.status, self.card_store, ticket, mount,
                                lambda: self.card_present(ticket.fingerprint))
             runner.should_stop = self.stop_event.is_set
+            published = read_json(os.path.join(self.cfg.cards_dir, ticket.fingerprint + ".json")) or {}
+            runner.card_label = (published.get("card") or {}).get("label")
             outcome = runner.run()
             if outcome in ("done", "failed"):
                 self._move_processed(path)

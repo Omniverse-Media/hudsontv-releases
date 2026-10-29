@@ -12,10 +12,10 @@ import os
 import shutil
 import time
 
-from . import hashing
+from . import hashing, offload
 from .pathsafe import PathError
 from .state import RollBook, now_iso
-from .ticket import TicketError, bind_to_card, destination_dir, group_dir
+from .ticket import TicketError, bind_to_card, destination_dir, group_dir, project_dir
 
 # Weights for the progress bar: copy, verify, handoff.
 _W_COPY, _W_VERIFY, _W_STAGE = 0.45, 0.45, 0.10
@@ -47,6 +47,7 @@ class JobRunner:
         self.staging = os.path.join(cfg.staging_dir, ticket.ticket_id)
         self.journal = None
         self.should_stop = lambda: False
+        self.card_label = None
 
     # ---- journal -------------------------------------------------------
     def _open_journal(self, bound):
@@ -134,6 +135,8 @@ class JobRunner:
     def run(self):
         """Returns 'done', 'failed' or 'paused'. Raises TicketError for a bad/changed ticket."""
         bound = bind_to_card(self.ticket, self.mount_path, self.profiles)
+        if self.jobs.load(self.ticket.ticket_id) is None:
+            self._check_space()
         self.journal = self._open_journal(bound)
         self._save()
         self._publish()
@@ -174,9 +177,23 @@ class JobRunner:
                 self._save()
                 self.status.set_clear(self.ticket.ticket_id, self.journal["clear"])
             self._publish("done", message="all files verified on the server")
-        self._write_report(outcome)
+        report = self._write_report(outcome)
+        self._write_deliverables(report)
         shutil.rmtree(self.staging, ignore_errors=True)
         return outcome
+
+    def _check_space(self):
+        """Refuse up front rather than fail halfway: the selection must fit on staging and the destination."""
+        need = sum(item.size for item in self.ticket.selection) + self.cfg.min_free_bytes
+        for label, path in (("the destination", self.ticket.approved_root), ("Harbor's staging area", self.cfg.staging_dir)):
+            try:
+                st = os.statvfs(path)
+            except OSError:
+                continue
+            free = st.f_bavail * st.f_frsize
+            if free < need:
+                raise TicketError("not enough space on %s: this ingest needs %s, only %s free"
+                                  % (label, offload._fmt_bytes(need), offload._fmt_bytes(free)))
 
     # ---- per file ------------------------------------------------------
     def _process_file(self, rel, f, src):
@@ -362,9 +379,38 @@ class JobRunner:
             _silent_unlink(tmp)
 
     # ---- report --------------------------------------------------------
+    def _write_deliverables(self, report):
+        """ASC MHL for the roll (verified files only) and the offload report, next to the footage."""
+        j = self.journal
+        try:
+            pdir = project_dir(self.ticket)
+            root = destination_dir(self.ticket, "other", "", roll=j["dit_roll"]) if j.get("dit") else pdir
+            entries = []
+            for f in j["files"].values():
+                if f["state"] != "staged" or not f["dest_path"] or not f["src_checksum"]:
+                    continue
+                rel = os.path.relpath(f["dest_path"], root)
+                if rel.startswith(".."):
+                    continue
+                entries.append({"path": rel.replace(os.sep, "/"), "size": f["size"], "mtime": f["src_mtime"] or 0,
+                                "hexdigest": f["src_checksum"].split(":", 1)[-1]})
+            mhl = offload.write_mhl(root, entries, self.algo) if self.cfg.write_mhl else None
+            if mhl:
+                report["mhl"] = os.path.relpath(mhl, pdir)
+                self.log.event("mhl_written", path=mhl, files=len(entries))
+            if self.cfg.write_offload_report:
+                out = os.path.join(pdir, j["dit"]["day"] if j.get("dit") else "", "Harbor reports")
+                base = "%s%s_%s" % ((j["dit"]["group"] + " " + j["dit_roll"] + "_") if j.get("dit") else "",
+                                    (j["finished_at"] or now_iso())[:19].replace(":", "").replace("T", "_"), j["ticket_id"][:8])
+                offload.write_report_files(out, base, report, card_label=self.card_label)
+                self.log.event("offload_report_written", path=os.path.join(out, base + ".html"))
+            self.log.write_report(report)
+        except (OSError, PathError) as e:
+            self.log.event("deliverables_failed", error=str(e))
+
     def _write_report(self, outcome):
         j = self.journal
-        self.log.write_report({
+        report = {
             "ticket_id": j["ticket_id"],
             "outcome": outcome,
             "source_card": {"fingerprint": j["fingerprint"]},
@@ -387,7 +433,9 @@ class JobRunner:
                  "destination": f["dest_path"], "times": f["times"], "error": f["error"], "note": f["note"]}
                 for r, f in j["files"].items()
             ],
-        })
+        }
+        self.log.write_report(report)
+        return report
 
 
 def _silent_unlink(path):

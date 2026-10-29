@@ -48,6 +48,9 @@ class Config:
     max_file_attempts: int = 3
     pause_retry_seconds: float = 30.0
     max_selection: int = 100000
+    min_free_bytes: int = 2 * 1024 ** 3  # headroom kept free on staging and the destination
+    write_mhl: bool = True  # ASC MHL v2 generation per roll (xxh64 only)
+    write_offload_report: bool = True  # <day>/Harbor reports/<roll>.html + .csv
 
     # Card clearing (off unless explicitly enabled; mount the card read-write too)
     allow_clear: bool = False

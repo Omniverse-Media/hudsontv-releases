@@ -59,7 +59,9 @@ def test_manifest_marks_kinds_and_daemon_lists_destinations(env):
     assert by["PRIVATE/M4ROOT/CLIP/C0001M01.XML"]["sidecar_of"] == "PRIVATE/M4ROOT/CLIP/C0001.MP4"
     with open(os.path.join(env.cfg().cards_dir, "_daemon.json")) as f:
         info = json.load(f)
-    assert info["destinations"] == [{"root": env.projects, "label": "Tehuti", "projects": ["Older Shoot"]}]
+    dests = info["destinations"]
+    assert dests[0].pop("free_bytes") > 0
+    assert dests == [{"root": env.projects, "label": "Tehuti", "projects": ["Older Shoot"]}]
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
