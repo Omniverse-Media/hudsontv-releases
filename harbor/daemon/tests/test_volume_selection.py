@@ -21,7 +21,7 @@ def test_ask_mode_lists_volume_without_reading_it(env):
     m = env.manifest()
     assert m["role"] == "unassigned"
     assert m["files"] == [] and m["checksum_state"] == "not_scanned"
-    assert m["card"]["label"] == "usbshare" and m["card"]["fstype"] == "exfat"
+    assert m["card"]["label"] == "USB 1" and m["card"]["fstype"] == "exfat"
     assert not os.path.exists(os.path.join(env.cfg().state_dir, "cards", "ABCD-1234.hashes.json"))
 
 

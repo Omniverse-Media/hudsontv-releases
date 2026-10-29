@@ -46,5 +46,12 @@
       status.files.every((f) => f.state === 'verified' || f.state === 'staged');
   }
 
-  return { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified };
+  // A selected clip brings its sidecars (metadata XML, camera thumbnails) so the editor gets the full clip.
+  function withSidecars(files, selected) {
+    const want = new Set(selected);
+    for (const f of files) if (f.sidecar_of && want.has(f.sidecar_of)) want.add(f.relative_path);
+    return files.filter((f) => want.has(f.relative_path)).map((f) => f.relative_path);
+  }
+
+  return { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified, withSidecars };
 }));

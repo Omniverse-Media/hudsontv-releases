@@ -9,7 +9,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from . import __version__, clear, detect, manifest as manifest_mod
+from . import __version__, clear, detect, manifest as manifest_mod, thumbs
 from .atomicio import write_json_atomic
 from .config import Config
 from .joblog import JobLog
@@ -110,12 +110,38 @@ class Daemon:
             "version": __version__,
             "updated_at": now_iso(),
             "approved_roots": self.cfg.approved_roots,
+            "destinations": self._destinations(),
             "checksum_algorithm": self.cfg.checksum_algorithm,
             "layout": self.cfg.layout,
             "allow_clear": self.cfg.allow_clear,
             "card_selection": self.cfg.card_selection,
             "profiles": [p.name for p in self.profiles.profiles],
         })
+
+    def _destinations(self):
+        """Each approved root with a friendly label and its existing project folders, newest first."""
+        out = []
+        for root in self.cfg.approved_roots:
+            projects = []
+            try:
+                with os.scandir(root) as it:
+                    for e in it:
+                        if e.name.startswith(".") or e.name.startswith("#") or e.name.startswith("@"):
+                            continue
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                projects.append((e.stat(follow_symlinks=False).st_mtime, e.name))
+                        except OSError:
+                            continue
+            except OSError:
+                pass
+            projects.sort(reverse=True)
+            out.append({
+                "root": root,
+                "label": self.cfg.destination_labels.get(root) or os.path.basename(root.rstrip("/")) or root,
+                "projects": [n for _t, n in projects[: self.cfg.max_listed_projects]],
+            })
+        return out
 
     # ---- cards ---------------------------------------------------------
     def _card_by_mount(self, path):
@@ -188,6 +214,9 @@ class Daemon:
             card.manifest = manifest_mod.build_listing(
                 self.cfg, self.profiles, card.mount, card.fingerprint, card.source, record, time.time())
             self._publish_manifest(card)
+            stop = lambda: card.stop.is_set() or self.stop_event.is_set()
+            thumbs.fill_thumbnails(self.cfg, card.mount.path, card.manifest,
+                                   publish=lambda m: self._publish_manifest(card), should_stop=stop)
             cache = self.card_store.hash_cache(card.fingerprint)
             cache = manifest_mod.fill_checksums(
                 self.cfg, card.mount, card.manifest, cache,

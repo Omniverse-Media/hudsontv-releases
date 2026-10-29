@@ -29,14 +29,15 @@ class Poller {
     if (!chk.ok) return;
 
     const d = share.readDaemonInfo(root);
-    const dsig = JSON.stringify([d.online, d.info && d.info.approved_roots, d.info && d.info.allow_clear]);
+    const dsig = JSON.stringify([d.online, d.info && d.info.approved_roots, d.info && d.info.allow_clear, d.info && d.info.destinations]);
     if (dsig !== this.daemonSig) { this.daemonSig = dsig; this.emit('daemon', d); }
 
     const seen = new Set();
     for (const m of share.listCards(root)) {
       const fp = m.card.fingerprint;
       seen.add(fp);
-      const sig = [m.present, m.role, m.checksum_state, m.scanned_at, Math.round((m.checksum_progress || 0) * 100), m.files.length].join('|');
+      const sig = [m.present, m.role, m.checksum_state, m.scanned_at, Math.round((m.checksum_progress || 0) * 100), m.files.length,
+        m.files.filter((f) => f.thumb).length].join('|');
       const prev = this.cards.get(fp);
       if (prev !== sig) {
         this.cards.set(fp, sig);

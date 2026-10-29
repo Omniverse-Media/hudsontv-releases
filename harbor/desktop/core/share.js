@@ -17,6 +17,7 @@ function dirs(shareRoot) {
     status: path.join(t, 'status'),
     cards: path.join(t, 'cards'),
     processed: path.join(t, 'processed'),
+    thumbs: path.join(t, 'thumbs'),
     logs: path.join(shareRoot, 'logs'),
   };
 }
@@ -107,5 +108,5 @@ function submitVolumeRole(shareRoot, fingerprint, role, origin) {
 
 module.exports = {
   dirs, checkShare, readDaemonInfo, listCards, readStatus, submitTicket, submitClearConfirm, submitVolumeRole,
-  UUID, DAEMON_STALE_MS,
+  UUID, FINGERPRINT, DAEMON_STALE_MS,
 };

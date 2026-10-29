@@ -34,6 +34,13 @@ class Config:
         ]
     )
     probe_duration: bool = True
+    thumbnails: bool = True
+    thumbnail_width: int = 360
+    thumbnail_timeout_seconds: float = 20.0
+
+    # Shown in the desktop instead of the container path, e.g. {"/projects": "Client Media"}
+    destination_labels: dict = field(default_factory=dict)
+    max_listed_projects: int = 200
 
     # Transfer
     layout: str = "flat"  # "flat" = <subfolder>/<filename>; "preserve" = <subfolder>/<card path>
@@ -64,6 +71,10 @@ class Config:
         return os.path.join(self.harbor_root, "tickets", "cards")
 
     @property
+    def thumbs_dir(self):
+        return os.path.join(self.harbor_root, "tickets", "thumbs")
+
+    @property
     def staging_dir(self):
         return os.path.join(self.harbor_root, "staging")
 
@@ -76,7 +87,7 @@ class Config:
         return os.path.join(self.harbor_root, "state")
 
     def ensure_dirs(self):
-        for d in (self.incoming_dir, self.status_dir, self.processed_dir, self.cards_dir,
+        for d in (self.incoming_dir, self.status_dir, self.processed_dir, self.cards_dir, self.thumbs_dir,
                   self.staging_dir, self.logs_dir, self.state_dir):
             os.makedirs(d, exist_ok=True)
 

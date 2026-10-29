@@ -6,7 +6,7 @@ const S = {
   settings: null, history: [], cards: new Map(), daemon: { online: false, info: null }, share: { ok: false },
   statuses: new Map(), view: null, // {kind:'card'|'volume'|'job', id}
   pendingRole: new Map(), // fingerprint -> role the user just picked, until the daemon publishes it
-  ui: new Map(), // fingerprint -> {showAll, types:Set, selected:Set|null, project, root}
+  ui: new Map(), // fingerprint -> {scope:'new'|'all'|null, type, selected:Set|null, project, root}
 };
 
 const $ = (id) => document.getElementById(id);
@@ -31,7 +31,7 @@ const isCard = (m) => !m.role || m.role === 'card';
 const viewFor = (m) => ({ kind: isCard(m) ? 'card' : 'volume', id: m.card.fingerprint });
 
 function cardUi(fp) {
-  if (!S.ui.has(fp)) S.ui.set(fp, { showAll: false, types: new Set(MEDIA), selected: null, project: '', root: '' });
+  if (!S.ui.has(fp)) S.ui.set(fp, { scope: null, type: 'all', selected: null, project: '', root: '' });
   return S.ui.get(fp);
 }
 
@@ -84,10 +84,11 @@ function renderNav() {
   const cards = present.filter(isCard);
   if (!cards.length) cl.append(h('div', { class: 'empty' }, 'No card inserted'));
   for (const m of cards) {
-    const recent = m.files.filter((f) => f.recent).length;
+    const media = m.files.filter(isMedia);
+    const recent = media.filter((f) => f.recent).length;
     cl.append(h('li', { class: sel('card', m.card.fingerprint), onclick: () => { S.view = { kind: 'card', id: m.card.fingerprint }; renderAll(); } },
       h('div', { class: 't' }, m.card.label || m.card.fingerprint),
-      h('div', { class: 's' }, `${recent} new · ${m.files.length} total`)));
+      h('div', { class: 's' }, `${recent} new · ${media.length} items`)));
   }
   const vl = $('volume-list'); vl.replaceChildren();
   // New drives first: they are waiting for a decision.
@@ -118,13 +119,18 @@ function renderView() {
   const v = $('view');
   // Keep scroll/typing state: only rebuild when nothing in the form has focus.
   if (v.contains(document.activeElement) && document.activeElement.type === 'text' && S.view && S.view.kind === 'card') return;
+  // Rebuilding empties the pane, which would jump the grid back to the top on every click.
+  const same = v.dataset.viewKey === (S.view ? S.view.kind + ':' + S.view.id : '');
+  const top = v.scrollTop;
   v.replaceChildren();
+  v.dataset.viewKey = S.view ? S.view.kind + ':' + S.view.id : '';
   if (!S.view) { v.append(h('div', { class: 'empty' }, 'Insert a card into the NAS USB port. Harbor will notify you when it is detected.')); return; }
   if (S.view.kind === 'card' || S.view.kind === 'volume') {
     const m = S.cards.get(S.view.id);
     if (!m || !m.present) { v.append(h('div', { class: 'empty' }, 'This card is no longer inserted.')); return; }
     if (isCard(m)) renderCard(v, m); else renderVolume(v, m);
   } else renderJob(v, S.view.id);
+  if (same) v.scrollTop = top;
 }
 
 // ---------- USB drive view (not yet a card, or ruled out) ----------
@@ -155,60 +161,115 @@ async function chooseRole(fp, role) {
 }
 
 // ---------- card view ----------
-function renderCard(v, m) {
-  const ui = cardUi(m.card.fingerprint);
-  const hashing = m.checksum_state !== 'complete';
-  const visible = m.files.filter((f) => (ui.showAll || f.recent) && ui.types.has(f.media_type));
-  if (ui.selected === null) ui.selected = new Set(m.files.filter((f) => f.recent).map((f) => f.relative_path));
-  const roots = (S.daemon.info && S.daemon.info.approved_roots) || [];
-  if (!ui.root) ui.root = roots.includes(S.settings.lastRoot) ? S.settings.lastRoot : roots[0] || '';
+const TYPE_LABEL = { all: 'All', video: 'Video', photo: 'Photos', audio: 'Audio' };
+const TYPE_ICON = { video: '▶', photo: '▣', audio: '♪', other: '•' };
+const dayKey = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+const fmtDay = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+const fmtClock = (iso) => new Date(iso).toLocaleTimeString([], { timeStyle: 'short' });
+// Files from daemons without `kind` are all treated as media.
+const isMedia = (f) => (f.kind ? f.kind === 'media' : f.media_type !== 'other');
 
-  v.append(h('div', { class: 'titlebar' }, h('h2', {}, m.card.label || m.card.fingerprint),
-    // Only daemons that publish a role understand role changes.
-    m.role ? h('button', { class: 'ghost', disabled: S.pendingRole.has(m.card.fingerprint), onclick: () => chooseRole(m.card.fingerprint, 'ignore') }, 'Not a card') : null));
-  v.append(h('div', { class: 'meta' }, `Card ${m.card.fingerprint} · ${m.profiles_matched.join(', ') || 'unknown structure'} · ${m.last_ingest_at ? 'last ingested ' + fmtTime(m.last_ingest_at) : 'never ingested'}`));
-  if (!m.profile_matched) v.append(h('div', { class: 'note warn' }, 'Unknown card structure. Harbor is showing every file on the card so nothing is missed. Check the file types below.'));
-  if (m.card.fingerprint_source === 'synthesized') v.append(h('div', { class: 'note warn' }, 'This card has no readable volume serial, so its identity is estimated. "New file" tracking may be less reliable.'));
+function renderCard(v, m) {
+  const fp = m.card.fingerprint;
+  const ui = cardUi(fp);
+  const media = m.files.filter(isMedia);
+  const extras = m.files.filter((f) => !isMedia(f) && !f.sidecar_of);
+  const recentCount = media.filter((f) => f.recent).length;
+  // Nothing new on the card: open on everything instead of an empty screen.
+  if (ui.scope === null) ui.scope = recentCount ? 'new' : 'all';
+  if (ui.selected === null) ui.selected = new Set(media.filter((f) => f.recent).map((f) => f.relative_path));
+  const scoped = media.filter((f) => ui.scope === 'all' || f.recent);
+  const counts = { all: scoped.length };
+  for (const t of ['video', 'photo', 'audio']) counts[t] = scoped.filter((f) => f.media_type === t).length;
+  if (ui.type !== 'all' && !counts[ui.type]) ui.type = 'all';
+  const shown = scoped.filter((f) => ui.type === 'all' || f.media_type === ui.type)
+    .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+
+  // header
+  const hashing = m.checksum_state !== 'complete';
+  const lastIngest = m.last_ingest_at ? 'Last ingested ' + fmtTime(m.last_ingest_at) : 'Never ingested';
+  v.append(h('div', { class: 'titlebar' },
+    h('div', {}, h('h2', {}, m.card.label || fp),
+      h('div', { class: 'meta' }, `${m.profiles_matched.join(' + ') || 'Card'} · ${media.length} items · ${lastIngest}`)),
+    m.role ? h('button', { class: 'ghost small', disabled: S.pendingRole.has(fp), onclick: () => chooseRole(fp, 'ignore') }, 'Not a card') : null));
   if (hashing) {
     const pct = Math.round((m.checksum_progress || 0) * 100);
-    v.append(h('div', { class: 'note warn' }, `Scanning card: calculating checksums (${pct}%). You can pick files now; ingest unlocks when this finishes.`),
+    v.append(h('div', { class: 'note warn' }, `Preparing the card (${pct}%). You can pick files now; Ingest unlocks when this finishes.`),
       h('div', { class: 'bar' }, h('div', { style: `width:${pct}%` })));
   }
+  if (!recentCount && ui.scope === 'all') v.append(h('div', { class: 'note' }, m.last_ingest_at ? 'Nothing new since the last ingest. Showing everything on the card.' : `Nothing from the last ${Math.round((m.recent_window_hours || 72) / 24)} days. Showing everything on the card.`));
 
+  // filters
+  const seg = (val, label) => h('button', { class: ui.scope === val ? 'on' : '', onclick: () => { ui.scope = val; renderAll(); } }, label);
   v.append(h('div', { class: 'toolbar' },
-    h('label', {}, h('input', { type: 'checkbox', checked: ui.showAll, onchange: (e) => { ui.showAll = e.target.checked; renderAll(); } }), ' Show everything on the card'),
-    h('span', { class: 'chips' }, MEDIA.map((t) => h('button', { class: ui.types.has(t) ? 'on' : '', onclick: () => { ui.types.has(t) ? ui.types.delete(t) : ui.types.add(t); renderAll(); } }, t))),
+    h('span', { class: 'seg' }, seg('new', `New (${recentCount})`), seg('all', `Everything (${media.length})`)),
+    h('span', { class: 'chips' }, ['all', 'video', 'photo', 'audio'].filter((t) => t === 'all' || counts[t]).map((t) =>
+      h('button', { class: ui.type === t ? 'on' : '', onclick: () => { ui.type = t; renderAll(); } }, `${TYPE_LABEL[t]} ${counts[t]}`))),
     h('span', { class: 'spacer' }),
-    h('button', { class: 'ghost', onclick: () => { visible.forEach((f) => ui.selected.add(f.relative_path)); renderAll(); } }, 'Select shown'),
-    h('button', { class: 'ghost', onclick: () => { visible.forEach((f) => ui.selected.delete(f.relative_path)); renderAll(); } }, 'Clear shown')));
+    h('button', { class: 'ghost small', onclick: () => { shown.forEach((f) => ui.selected.add(f.relative_path)); renderAll(); } }, 'Select all shown'),
+    h('button', { class: 'ghost small', onclick: () => { shown.forEach((f) => ui.selected.delete(f.relative_path)); renderAll(); } }, 'Clear')));
 
-  const body = h('tbody');
-  for (const f of visible) {
-    body.append(h('tr', { class: f.recent ? 'recent' : '' },
-      h('td', {}, h('input', { type: 'checkbox', checked: ui.selected.has(f.relative_path), onchange: (e) => { e.target.checked ? ui.selected.add(f.relative_path) : ui.selected.delete(f.relative_path); updateSummary(m); } })),
-      h('td', { class: 'path' }, f.relative_path),
-      h('td', {}, f.media_type),
-      h('td', { class: 'num' }, fmtBytes(f.size)),
-      h('td', { class: 'num' }, fmtDur(f.duration)),
-      h('td', { class: 'num' }, fmtTime(f.timestamp))));
+  // grid, grouped by day
+  const days = [];
+  for (const f of shown) {
+    const k = dayKey(f.timestamp);
+    if (!days.length || days[days.length - 1].key !== k) days.push({ key: k, iso: f.timestamp, files: [] });
+    days[days.length - 1].files.push(f);
   }
-  v.append(h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'File'), h('th', {}, 'Type'), h('th', {}, 'Size'), h('th', {}, 'Length'), h('th', {}, 'Time'))), body)));
-  if (!visible.length) v.append(h('div', { class: 'empty' }, ui.showAll ? 'No files match.' : 'No new files since the last ingest. Turn on "Show everything on the card" to see all files.'));
-
-  // destination form
-  const project = h('input', { type: 'text', placeholder: 'e.g. 2026-10 Hudson Wedding', value: ui.project, oninput: (e) => { ui.project = e.target.value; updateSummary(m); } });
-  const rootSel = h('select', { onchange: (e) => { ui.root = e.target.value; } }, roots.map((r) => h('option', { value: r, selected: r === ui.root }, r)));
-  const folders = h('details', {}, h('summary', {}, 'Subfolders'), h('div', { class: 'folders' }, MEDIA.flatMap((t) => [h('label', {}, t),
-    h('input', { type: 'text', value: S.settings.subfolderMap[t], onchange: (e) => { S.settings.subfolderMap[t] = e.target.value; window.harbor.saveSettings({ subfolderMap: S.settings.subfolderMap }); } })])));
-  const canClear = !!(S.daemon.info && S.daemon.info.allow_clear);
-  const clearBox = h('input', { type: 'checkbox', checked: !!ui.clear, onchange: (e) => { ui.clear = e.target.checked; } });
-  v.append(h('div', { class: 'form' },
-    h('label', {}, 'Project folder'), project,
-    h('label', {}, 'Destination'), rootSel,
-    h('label', {}, 'Folders'), folders,
-    canClear ? h('label', {}, 'After verifying') : null, canClear ? h('label', {}, clearBox, ' Allow clearing this card afterwards (you will confirm separately)') : null,
-    h('span'), h('div', {}, h('button', { id: 'btn-ingest', onclick: () => submit(m) }, 'Ingest'), ' ', h('span', { id: 'sum', class: 'meta' }))));
+  const grid = h('div', { class: 'days' });
+  for (const d of days) {
+    const allOn = d.files.every((f) => ui.selected.has(f.relative_path));
+    grid.append(h('div', { class: 'dayhead' },
+      h('span', { class: 't' }, fmtDay(d.iso)), h('span', { class: 'meta' }, `${d.files.length} item${d.files.length === 1 ? '' : 's'}`),
+      h('button', { class: 'ghost small', onclick: () => { d.files.forEach((f) => (allOn ? ui.selected.delete(f.relative_path) : ui.selected.add(f.relative_path))); renderAll(); } }, allOn ? 'Deselect day' : 'Select day')));
+    grid.append(h('div', { class: 'grid' }, d.files.map((f) => tile(fp, f, ui))));
+  }
+  if (!shown.length) grid.append(h('div', { class: 'empty' }, 'No files match these filters.'));
+  if (extras.length) {
+    grid.append(h('details', { class: 'extras' }, h('summary', {}, `Other files on the card (${extras.length})`),
+      h('ul', {}, extras.map((f) => h('li', {}, h('label', {}, h('input', { type: 'checkbox', checked: ui.selected.has(f.relative_path), onchange: (e) => { e.target.checked ? ui.selected.add(f.relative_path) : ui.selected.delete(f.relative_path); renderAll(); } }), ' ', f.relative_path, h('span', { class: 'meta' }, ' · ' + fmtBytes(f.size))))))));
+  }
+  v.append(grid);
+  v.append(ingestBar(m, ui));
   updateSummary(m);
+}
+
+function tile(fp, f, ui) {
+  const on = ui.selected.has(f.relative_path);
+  const toggle = () => { on ? ui.selected.delete(f.relative_path) : ui.selected.add(f.relative_path); renderAll(); };
+  const pic = f.thumb
+    ? h('img', { src: `harbor-thumb://card/${encodeURIComponent(fp)}/${encodeURIComponent(f.thumb)}`, alt: '', loading: 'lazy', draggable: 'false' })
+    : h('div', { class: 'ph ' + f.media_type }, h('span', { class: 'ico' }, TYPE_ICON[f.media_type] || '•'),
+      h('span', { class: 'ext' }, (f.relative_path.split('.').pop() || '').toUpperCase()));
+  return h('div', { class: 'tile' + (on ? ' on' : '') + (f.recent ? ' recent' : ''), title: f.relative_path, onclick: toggle },
+    h('div', { class: 'pic' }, pic,
+      h('span', { class: 'check' }, on ? '✓' : ''),
+      f.recent ? h('span', { class: 'badge new' }, 'NEW') : null,
+      f.duration != null ? h('span', { class: 'badge dur' }, fmtDur(f.duration)) : null),
+    h('div', { class: 'name' }, f.filename || f.relative_path.split('/').pop()),
+    h('div', { class: 'meta' }, `${fmtClock(f.timestamp)} · ${fmtBytes(f.size)}`));
+}
+
+function destinations() {
+  const info = S.daemon.info || {};
+  if (Array.isArray(info.destinations) && info.destinations.length) return info.destinations;
+  return (info.approved_roots || []).map((r) => ({ root: r, label: r, projects: [] }));
+}
+
+function ingestBar(m, ui) {
+  const dests = destinations();
+  if (!dests.some((d) => d.root === ui.root)) ui.root = (dests.find((d) => d.root === S.settings.lastRoot) || dests[0] || {}).root || '';
+  const dest = dests.find((d) => d.root === ui.root) || { label: '', projects: [] };
+  const listId = 'projects-' + m.card.fingerprint.replace(/[^A-Za-z0-9_-]/g, '_');
+  const project = h('input', { type: 'text', list: listId, placeholder: 'New or existing project folder', value: ui.project, oninput: (e) => { ui.project = e.target.value; updateSummary(m); } });
+  const rootSel = h('select', { onchange: (e) => { ui.root = e.target.value; renderAll(); } }, dests.map((d) => h('option', { value: d.root, selected: d.root === ui.root }, d.label)));
+  const canClear = !!(S.daemon.info && S.daemon.info.allow_clear);
+  return h('div', { class: 'ingestbar' },
+    h('div', { class: 'sel' }, h('div', { id: 'sum', class: 't' }), h('div', { id: 'where', class: 'meta' })),
+    h('label', { class: 'field' }, h('span', {}, 'Save to'), rootSel),
+    h('label', { class: 'field grow' }, h('span', {}, 'Project'), project, h('datalist', { id: listId }, dest.projects.map((p) => h('option', { value: p })))),
+    canClear ? h('label', { class: 'field' }, h('span', {}, 'Afterwards'), h('label', {}, h('input', { type: 'checkbox', checked: !!ui.clear, onchange: (e) => { ui.clear = e.target.checked; } }), ' Offer to clear card')) : null,
+    h('button', { id: 'btn-ingest', onclick: () => submit(m) }, 'Ingest'));
 }
 
 function updateSummary(m) {
@@ -218,7 +279,12 @@ function updateSummary(m) {
   const err = window.HarborLogic.checkProjectName(ui.project);
   const btn = $('btn-ingest'); if (!btn) return;
   btn.disabled = !files.length || !!err || m.checksum_state !== 'complete' || !S.daemon.online || !ui.root;
-  $('sum').textContent = `${files.length} files, ${fmtBytes(bytes)}` + (err && ui.project ? ' · ' + err : '');
+  $('sum').textContent = files.length ? `${files.length} selected · ${fmtBytes(bytes)}` : 'Nothing selected';
+  const dest = destinations().find((d) => d.root === ui.root);
+  const name = ui.project.trim();
+  const exists = dest && dest.projects.includes(name);
+  $('where').textContent = !name ? 'Pick or type a project folder'
+    : err ? err : `${dest ? dest.label : ui.root} › ${name}${exists ? ' (existing)' : ' (new folder)'}`;
 }
 
 async function submit(m) {
@@ -286,13 +352,18 @@ function openSettings() {
   const share = h('input', { type: 'text', value: S.settings.shareRoot, placeholder: '/Volumes/harbor or Z:\\' });
   const user = h('input', { type: 'text', value: S.settings.user });
   const machine = h('input', { type: 'text', value: S.settings.machine });
+  const folders = {};
+  for (const t of MEDIA) folders[t] = h('input', { type: 'text', value: S.settings.subfolderMap[t] });
   dlg.replaceChildren(h('h3', {}, 'Settings'),
     h('p', { class: 'meta' }, 'Choose the mapped Harbor share. Harbor talks to the NAS only through files on this share, using your existing SMB login.'),
     h('div', { class: 'form', style: 'grid-template-columns:110px 1fr' },
       h('label', {}, 'Harbor share'), h('div', {}, share, ' ', h('button', { class: 'ghost', onclick: async () => { const p = await window.harbor.pickShare(); if (p) share.value = p; } }, 'Browse')),
       h('label', {}, 'Your name'), user, h('label', {}, 'This computer'), machine),
+    h('p', { class: 'meta' }, 'Inside each project folder, files are sorted into these subfolders:'),
+    h('div', { class: 'form', style: 'grid-template-columns:110px 1fr' }, MEDIA.flatMap((t) => [h('label', {}, t), folders[t]])),
     h('div', { class: 'actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'),
-      h('button', { onclick: async () => { S.settings = await window.harbor.saveSettings({ shareRoot: share.value.trim(), user: user.value.trim(), machine: machine.value.trim() }); dlg.close(); renderAll(); } }, 'Save')));
+      h('button', { onclick: async () => { const subfolderMap = {}; for (const t of MEDIA) subfolderMap[t] = folders[t].value.trim();
+        S.settings = await window.harbor.saveSettings({ shareRoot: share.value.trim(), user: user.value.trim(), machine: machine.value.trim(), subfolderMap }); dlg.close(); renderAll(); } }, 'Save')));
   dlg.showModal();
 }
 

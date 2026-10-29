@@ -170,3 +170,14 @@ test('poller re-emits a volume when its role changes', () => {
   const roles = events.filter((e) => e[0] === 'card').map((e) => e[1].manifest.role);
   assert.deepEqual(roles, ['unassigned', 'ignored']);
 });
+
+test('withSidecars adds the metadata that belongs to a selected clip', () => {
+  const { withSidecars } = require('../core/logic');
+  const files = [
+    { relative_path: 'CLIP/C1.MP4', kind: 'media' },
+    { relative_path: 'CLIP/C1M01.XML', kind: 'sidecar', sidecar_of: 'CLIP/C1.MP4' },
+    { relative_path: 'CLIP/C2.MP4', kind: 'media' },
+    { relative_path: 'CLIP/C2M01.XML', kind: 'sidecar', sidecar_of: 'CLIP/C2.MP4' },
+  ];
+  assert.deepEqual(withSidecars(files, ['CLIP/C1.MP4']), ['CLIP/C1.MP4', 'CLIP/C1M01.XML']);
+});

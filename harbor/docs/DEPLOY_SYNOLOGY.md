@@ -9,7 +9,9 @@
    no access to `staging` or `state`. Disable the recycle bin on it. **Do not add `staging` or `state` to any
    Synology Drive / ShareSync task.**
 2. **Config:** copy `daemon/config/harbor.example.json` to `daemon/config/harbor.json`. `approved_roots` are the
-   paths *inside the container* (`/projects` below). Put the project shares you want writable there.
+   paths *inside the container* (`/projects` below). Put the project shares you want writable there, mount each one
+   read-write in `docker-compose.yml`, and give it a friendly name in `destination_labels` (shown in the app's
+   "Save to" menu, with the project folders already in it).
 3. **Container Manager:** create a project from `daemon/docker-compose.yml`. The host filesystem is mounted
    read-only at `/host` with `propagation: rslave`, so a card in any USB slot (`/volumeUSB<n>`, where DSM changes n on
    replug) appears in the container. **DSM 7.1** has no Container Manager, only the Docker package without compose
@@ -20,10 +22,12 @@
    **Use as card** for a card reader. Choices are remembered per volume. With `"auto"`, run
    `docker exec harbor-daemon harbor-daemon baseline --include-removable` or list serials in
    `known_server_volume_serials` instead.
-5. **Fingerprint check:** insert a card and confirm `tickets/cards/<fingerprint>.json` appears with
+5. **Previews:** the daemon writes small JPEG thumbnails to `tickets/thumbs/<fingerprint>/` (Sony `THMBNL` images,
+   ffmpeg frames, raw embedded previews). Desktop users need read access there. Set `"thumbnails": false` to skip.
+6. **Fingerprint check:** insert a card and confirm `tickets/cards/<fingerprint>.json` appears with
    `fingerprint_source: "volume-serial"`. If it says `synthesized`, set `serial_command` in the config
    (for example `blkid -s UUID -o value {device}`) or expose the volume serial another way.
-6. **Same filesystem for staging and projects** gives an atomic, no-copy handoff. Separate shared folders on btrfs
+7. **Same filesystem for staging and projects** gives an atomic, no-copy handoff. Separate shared folders on btrfs
    are different subvolumes, so Harbor falls back to copying into `.<name>.harbor-partial` in the destination, re-verifying,
    then renaming into place. **Add `*.harbor-partial` to the ShareSync file filter** so partial files are never shipped.
 

@@ -1,9 +1,11 @@
 'use strict';
-const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net } = require('electron');
+const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
 const share = require('./core/share');
 const { buildTicket } = require('./core/ticket');
+const { withSidecars } = require('./core/logic');
 const { Poller } = require('./core/poller');
 const { Store } = require('./core/store');
 
@@ -91,7 +93,7 @@ function setupIpc() {
     const manifest = share.listCards(root).find((m) => m.card.fingerprint === req.fingerprint);
     if (!manifest || !manifest.present) throw new Error('That card is no longer present.');
     const ticket = buildTicket({
-      manifest, selected: req.selected, projectName: req.projectName, approvedRoot: req.approvedRoot,
+      manifest, selected: withSidecars(manifest.files, req.selected), projectName: req.projectName, approvedRoot: req.approvedRoot,
       subfolderMap: req.subfolderMap, clearCard: !!req.clearCard && !!(latest.daemon.info && latest.daemon.info.allow_clear),
       origin: origin(),
     });
@@ -133,6 +135,20 @@ function setupIpc() {
   });
 }
 
+// Card previews live on the share; the renderer may load only files inside tickets/thumbs.
+protocol.registerSchemesAsPrivileged([{ scheme: 'harbor-thumb', privileges: { standard: true, secure: true } }]);
+
+function registerThumbProtocol() {
+  protocol.handle('harbor-thumb', (req) => {
+    // harbor-thumb://card/<fingerprint>/<name>: the fingerprint goes in the path because hosts are lowercased.
+    const parts = new URL(req.url).pathname.split('/').filter(Boolean).map(decodeURIComponent);
+    const [fp, name] = parts.length === 2 ? parts : ['', ''];
+    const root = store.settings().shareRoot;
+    if (!root || !share.FINGERPRINT.test(fp) || !/^[0-9a-f]{20}\.jpg$/.test(name)) return new Response(null, { status: 404 });
+    return net.fetch(pathToFileURL(path.join(share.dirs(root).thumbs, fp, name)).toString());
+  });
+}
+
 function startPoller() {
   poller = new Poller(() => store.settings().shareRoot, (type, payload) => {
     if (type === 'card') {
@@ -154,6 +170,7 @@ else {
   app.on('second-instance', showWindow);
   app.whenReady().then(() => {
     store = new Store(app.getPath('userData'));
+    registerThumbProtocol();
     setupIpc();
     startPoller();
     createWindow();
