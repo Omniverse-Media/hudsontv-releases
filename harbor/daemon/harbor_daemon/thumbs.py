@@ -125,7 +125,7 @@ def fill_thumbnails(cfg, mount_path, manifest, publish=None, should_stop=lambda:
     for f in manifest["files"]:
         if should_stop():
             return
-        if f.get("sidecar_of") or f["media_type"] not in ("video", "photo"):
+        if f.get("kind", "media") != "media" or f["media_type"] not in ("video", "photo"):
             continue
         name = thumb_name(f)
         if make_thumbnail(cfg, mount_path, f, os.path.join(out_dir, name)):
