@@ -256,9 +256,17 @@ function tile(fp, f, ui) {
     h('div', { class: 'pic' }, pic,
       h('span', { class: 'check' }, on ? '✓' : ''),
       f.recent ? h('span', { class: 'badge new' }, 'NEW') : null,
-      f.duration != null ? h('span', { class: 'badge dur' }, fmtDur(f.duration)) : null),
+      f.duration != null ? h('span', { class: 'badge dur' }, fmtDur(f.duration)) : null,
+      f.media_type === 'video' || f.media_type === 'audio'
+        ? h('button', { class: 'playbtn', title: 'Play', onclick: (e) => { e.stopPropagation(); playClip(fp, f); } }, '▶') : null),
     h('div', { class: 'name' }, f.filename || f.relative_path.split('/').pop()),
     h('div', { class: 'meta' }, `${fmtClock(f.timestamp)} · ${fmtBytes(f.size)}`));
+}
+
+function playClip(fp, f) {
+  window.HarborPlayer.open({ h, fingerprint: fp, file: f, onLook: async (look) => {
+    S.settings = await window.harbor.saveSettings({ cardLooks: { ...(S.settings.cardLooks || {}), [fp]: look } });
+  } });
 }
 
 function destinations() {

@@ -13,6 +13,8 @@ const DEFAULTS = {
   organize: 'dit', // 'dit' = <project>/<day>/<group>/<roll>/<card folders>; 'simple' = media-type subfolders
   groups: ['Camera A', 'Camera B', 'Camera C', 'Audio 1', 'Audio 2'],
   cardGroups: {}, // card fingerprint -> last group it was offloaded as
+  cardRoots: {}, // card fingerprint -> folder where its SMB share is mounted, when not /Volumes/usbshareN
+  cardLooks: {}, // card fingerprint -> player view (slog3, clog3, vlog, logc3, hlg, none)
 };
 
 function safeUser() { try { return os.userInfo().username; } catch (e) { return 'unknown'; } }

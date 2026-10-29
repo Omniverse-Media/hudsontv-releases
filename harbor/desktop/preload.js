@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('harbor', {
   submit: (req) => ipcRenderer.invoke('harbor:submit', req),
   confirmClear: (ticketId) => ipcRenderer.invoke('harbor:confirmClear', ticketId),
   openReport: (ticketId) => ipcRenderer.invoke('harbor:openReport', ticketId),
+  resolveClip: (fingerprint, rel) => ipcRenderer.invoke('harbor:resolveClip', fingerprint, rel),
+  connectCard: (fingerprint) => ipcRenderer.invoke('harbor:connectCard', fingerprint),
+  pickCardFolder: (fingerprint) => ipcRenderer.invoke('harbor:pickCardFolder', fingerprint),
+  openClipExternally: (fingerprint, rel) => ipcRenderer.invoke('harbor:openClipExternally', fingerprint, rel),
   setVolumeRole: (fingerprint, role) => ipcRenderer.invoke('harbor:setVolumeRole', fingerprint, role),
   onEvent: (cb) => {
     const fn = (_e, msg) => cb(msg);

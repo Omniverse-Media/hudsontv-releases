@@ -203,3 +203,25 @@ test('DIT rolls: group prefixes, day folder and ticket spec', () => {
   assert.throws(() => buildTicket(base(manifest(), { dit: { day: '2026-10-29', group: '../x' } })), /Group/);
   assert.equal(buildTicket(base(manifest())).destination.dit, undefined);
 });
+
+test('playback: card share name, mount lookup, SMB host and safe paths', () => {
+  const pb = require('../core/playback');
+  const m = manifest({ card: { fingerprint: 'ABCD-1234', label: 'USB 6', mount_path: '/host/volumeUSB6/usbshare' } });
+  assert.equal(pb.cardShareName(m), 'usbshare6');
+  const vols = tmp();
+  const root = path.join(vols, 'usbshare6-1');
+  fs.mkdirSync(path.join(root, 'PRIVATE/M4ROOT/CLIP'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'PRIVATE/M4ROOT/CLIP/C1.MP4'), Buffer.alloc(10));
+  m.files[0].kind = 'media';
+  assert.equal(pb.findCardRoot(m, { volumesDir: vols }), root);
+  fs.writeFileSync(path.join(root, 'PRIVATE/M4ROOT/CLIP/C1.MP4'), Buffer.alloc(11)); // a different card in that slot
+  assert.equal(pb.findCardRoot(m, { volumesDir: vols }), null);
+  assert.equal(pb.clipPath(root, '../../etc/passwd'), null);
+  assert.equal(pb.clipPath(root, 'A/B.MP4'), path.join(root, 'A', 'B.MP4'));
+  const mount = '//maniakal@Thriller._smb._tcp.local/Harbor on /Volumes/Harbor (smbfs, nodev, nosuid, mounted by me)\n/dev/disk3s1 on / (apfs)';
+  assert.equal(pb.smbHost(mount, '/Volumes/Harbor'), 'Thriller._smb._tcp.local');
+  assert.equal(pb.smbHost(mount, '/Volumes/Other'), null);
+  assert.equal(pb.guessLook(m), 'slog3');
+  assert.equal(pb.canPlayInside('X/C1.MP4'), true);
+  assert.equal(pb.canPlayInside('X/A001.R3D'), false);
+});

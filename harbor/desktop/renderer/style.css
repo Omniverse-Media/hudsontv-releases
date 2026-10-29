@@ -120,3 +120,22 @@ button.small { padding: 4px 10px; font-size: 12px; }
 .ditrow .inline { font-size: 13px; color: var(--muted); }
 .ditrow .day { width: 120px; padding: 5px 8px; font-size: 13px; }
 .ditrow .meta { margin: 0; }
+
+/* Clip player */
+.tile .playbtn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; border-radius: 50%;
+  padding: 0; font-size: 16px; line-height: 44px; background: rgba(0,0,0,.6); color: #fff; border: 1px solid rgba(255,255,255,.5); opacity: 0; transition: opacity .12s; }
+.tile:hover .playbtn, .tile .playbtn:focus-visible { opacity: 1; }
+dialog.player { max-width: min(1280px, 94vw); width: 94vw; padding: 14px 16px; }
+dialog.player .phead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+dialog.player .phead h3 { margin: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.player .phead .spacer { flex: 1; }
+dialog.player .stage { background: #000; border-radius: 8px; width: 100%; height: min(70vh, calc((94vw - 32px) * 9 / 16)); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+dialog.player .stage canvas, dialog.player .stage video { width: 100%; height: 100%; object-fit: contain; display: block; }
+dialog.player .noplay { color: #ddd; text-align: center; padding: 24px; }
+dialog.player .noplay .meta { color: #aaa; }
+dialog.player .controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+dialog.player .controls .play { min-width: 44px; }
+dialog.player .scrub { flex: 1; }
+dialog.player .time { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 92px; text-align: right; }
+dialog.player .look { font-size: 12px; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+dialog.player > .meta { margin-top: 6px; min-height: 1em; }

@@ -8,6 +8,10 @@ const { buildTicket } = require('./core/ticket');
 const { withSidecars } = require('./core/logic');
 const { Poller } = require('./core/poller');
 const { Store } = require('./core/store');
+const playback = require('./core/playback');
+const { execFileSync } = require('node:child_process');
+const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
 
 let win = null;
 let tray = null;
@@ -76,7 +80,7 @@ function setupIpc() {
 
   ipcMain.handle('harbor:saveSettings', (_e, patch) => {
     const allowed = {};
-    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups']) if (k in patch) allowed[k] = patch[k];
+    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks']) if (k in patch) allowed[k] = patch[k];
     const s = store.saveSettings(allowed);
     if ('shareRoot' in allowed) poller.tick();
     return s;
@@ -128,6 +132,52 @@ function setupIpc() {
     share.submitVolumeRole(root, fingerprint, role, origin());
   });
 
+  // Playback: the renderer names a clip by card + relative path; only files in the card's manifest resolve.
+  const clipFile = (fingerprint, rel) => {
+    const manifest = latest.cards.get(fingerprint);
+    const f = manifest && manifest.files.find((x) => x.relative_path === rel && playback.PLAYABLE.has(x.media_type));
+    if (!f) throw new Error('That clip is not on the card.');
+    const root = playback.findCardRoot(manifest, { override: (store.settings().cardRoots || {})[fingerprint] });
+    return { manifest, f, root, file: root && playback.clipPath(root, rel) };
+  };
+
+  ipcMain.handle('harbor:resolveClip', (_e, fingerprint, rel) => {
+    const { manifest, file } = clipFile(fingerprint, rel);
+    const look = (store.settings().cardLooks || {})[fingerprint] || playback.guessLook(manifest);
+    if (!file) return { mounted: false, share: playback.cardShareName(manifest), look };
+    const token = crypto.randomBytes(12).toString('hex');
+    if (mediaTokens.size > 50) mediaTokens.clear();
+    mediaTokens.set(token, file);
+    return { mounted: true, url: `harbor-media://clip/${token}`, inside: playback.canPlayInside(rel), look };
+  });
+
+  ipcMain.handle('harbor:connectCard', async (_e, fingerprint) => {
+    const manifest = latest.cards.get(fingerprint);
+    const shareName = manifest && playback.cardShareName(manifest);
+    let host = null;
+    try { host = playback.smbHost(execFileSync('/sbin/mount', { encoding: 'utf8' }), store.settings().shareRoot); } catch (e) { /* not macOS */ }
+    if (!shareName || !host) return false;
+    // Finder mounts it with the Harbor share's saved login; it appears under /Volumes.
+    await shell.openExternal(`smb://${host}/${encodeURIComponent(shareName)}`);
+    return true;
+  });
+
+  ipcMain.handle('harbor:pickCardFolder', async (_e, fingerprint) => {
+    const manifest = latest.cards.get(fingerprint);
+    if (!manifest) return false;
+    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Select the card\'s folder on the NAS' });
+    if (r.canceled) return false;
+    if (!playback.findCardRoot(manifest, { override: r.filePaths[0], volumesDir: '/nonexistent' })) return false;
+    store.saveSettings({ cardRoots: { ...(store.settings().cardRoots || {}), [fingerprint]: r.filePaths[0] } });
+    return true;
+  });
+
+  ipcMain.handle('harbor:openClipExternally', async (_e, fingerprint, rel) => {
+    const { file } = clipFile(fingerprint, rel);
+    if (!file) return false;
+    return (await shell.openPath(file)) === '';
+  });
+
   ipcMain.handle('harbor:openReport', async (_e, ticketId) => {
     if (!share.UUID.test(ticketId)) return false;
     const p = path.join(share.dirs(store.settings().shareRoot).logs, ticketId + '.report.json');
@@ -138,7 +188,10 @@ function setupIpc() {
 }
 
 // Card previews live on the share; the renderer may load only files inside tickets/thumbs.
-protocol.registerSchemesAsPrivileged([{ scheme: 'harbor-thumb', privileges: { standard: true, secure: true } }]);
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'harbor-thumb', privileges: { standard: true, secure: true } },
+  { scheme: 'harbor-media', privileges: { standard: true, secure: true, stream: true, corsEnabled: true, supportFetchAPI: true } },
+]);
 
 function registerThumbProtocol() {
   protocol.handle('harbor-thumb', (req) => {
@@ -148,6 +201,28 @@ function registerThumbProtocol() {
     const root = store.settings().shareRoot;
     if (!root || !share.FINGERPRINT.test(fp) || !/^[0-9a-f]{20}\.jpg$/.test(name)) return new Response(null, { status: 404 });
     return net.fetch(pathToFileURL(path.join(share.dirs(root).thumbs, fp, name)).toString());
+  });
+}
+
+// harbor-media://clip/<token> streams one resolved clip with byte ranges, so the player can seek.
+const mediaTokens = new Map();
+function registerMediaProtocol() {
+  protocol.handle('harbor-media', async (req) => {
+    const file = mediaTokens.get(new URL(req.url).pathname.replace(/^\//, ''));
+    let size;
+    try { size = file && fs.statSync(file).size; } catch (e) { size = null; }
+    if (!size) return new Response(null, { status: 404 });
+    const type = /\.(mp3|wav|m4a|aac)$/i.test(file) ? 'audio/mp4' : 'video/mp4';
+    const base = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*' };
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('range') || '');
+    if (!m) return new Response(Readable.toWeb(fs.createReadStream(file)), { status: 200, headers: { ...base, 'Content-Length': String(size) } });
+    let start = m[1] ? Number(m[1]) : size - Number(m[2]);
+    let end = m[1] && m[2] ? Number(m[2]) : size - 1;
+    start = Math.max(0, start); end = Math.min(end, size - 1);
+    if (start > end) return new Response(null, { status: 416, headers: { ...base, 'Content-Range': `bytes */${size}` } });
+    return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })), {
+      status: 206, headers: { ...base, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${size}` },
+    });
   });
 }
 
@@ -173,6 +248,7 @@ else {
   app.whenReady().then(() => {
     store = new Store(app.getPath('userData'));
     registerThumbProtocol();
+    registerMediaProtocol();
     setupIpc();
     startPoller();
     createWindow();
