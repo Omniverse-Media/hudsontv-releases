@@ -2,6 +2,7 @@
 const { app, nativeTheme, powerSaveBlocker, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net, powerMonitor } = require('electron');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
+const APP_ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 const os = require('node:os');
 const fs = require('node:fs');
 const share = require('./core/share');
@@ -37,7 +38,7 @@ function showPrompt(manifest) {
   send('prompt', promptInfo());
   if (promptWin && !promptWin.isDestroyed()) { promptWin.show(); promptWin.focus(); return; }
   promptWin = new BrowserWindow({
-    width: 560, height: 700, minWidth: 460, minHeight: 520, title: 'Card docked', show: false,
+    width: 560, height: 700, minWidth: 460, minHeight: 520, title: 'Card docked', show: false, icon: APP_ICON,
     alwaysOnTop: true, fullscreenable: false, minimizable: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
@@ -61,7 +62,7 @@ function showWindow() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1180, height: 780, minWidth: 900, minHeight: 600, title: 'Harbor',
+    width: 1180, height: 780, minWidth: 900, minHeight: 600, title: 'Harbor', icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
@@ -495,9 +496,10 @@ else {
     registerMediaProtocol();
     setupIpc();
     startPoller();
+    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(nativeImage.createFromPath(APP_ICON));
     createWindow();
     powerMonitor.on('resume', () => setTimeout(() => { if (poller) poller.tick(); }, 4000));
-    tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png')));
+    tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png')));
     tray.setToolTip('Harbor');
     tray.setContextMenu(trayMenu());
     // With a card waiting, a click on the tray icon goes straight to its prompt.

@@ -45,7 +45,8 @@
           ]
         }
       ],
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "icon": "assets/icon.icns"
     },
     "win": {
       "target": [
@@ -55,14 +56,18 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
     },
-    "artifactName": "Harbor-${version}-${os}-${arch}.${ext}"
+    "artifactName": "Harbor-${version}-${os}-${arch}.${ext}",
+    "linux": {
+      "icon": "assets/icon.png"
+    }
   },
   "author": "Omniverse Media <omniversemediagroup@gmail.com>",
   "homepage": "https://github.com/Omniverse-Media/hudsontv-releases",
