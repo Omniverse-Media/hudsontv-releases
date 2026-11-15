@@ -1,7 +1,8 @@
 'use strict';
-const { app, powerSaveBlocker, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net, powerMonitor } = require('electron');
+const { app, nativeTheme, powerSaveBlocker, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net, powerMonitor } = require('electron');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
+const os = require('node:os');
 const fs = require('node:fs');
 const share = require('./core/share');
 const { buildTicket } = require('./core/ticket');
@@ -189,6 +190,9 @@ function runLocal(j) {
     .finally(() => { powerSaveBlocker.stop(blocker); });
 }
 
+// Dark, light or follow the system: nativeTheme drives prefers-color-scheme in every window.
+function applyTheme() { nativeTheme.themeSource = ['dark', 'light'].includes(store.settings().theme) ? store.settings().theme : store.settings().theme === 'auto' ? 'system' : 'dark'; }
+
 function origin() {
   const s = store.settings();
   return { machine: s.machine, user: s.user };
@@ -221,10 +225,11 @@ function setupIpc() {
 
   ipcMain.handle('harbor:saveSettings', (_e, patch) => {
     const allowed = {};
-    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks', 'dockPrompt', 'announce', 'announceSound', 'localRoot', 'destMode']) if (k in patch) allowed[k] = patch[k];
+    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks', 'dockPrompt', 'theme', 'announce', 'announceSound', 'localRoot', 'destMode']) if (k in patch) allowed[k] = patch[k];
     const s = store.saveSettings(allowed);
     if ('shareRoot' in allowed) poller.tick();
     if ('announce' in allowed) refreshBadge();
+    if ('theme' in allowed) applyTheme();
     return s;
   });
 
@@ -253,6 +258,19 @@ function setupIpc() {
     if (mode !== 'nas') out.localId = startLocal(req);
     store.saveSettings({ destMode: mode });
     return out;
+  });
+
+  // "Browse…" for a NAS folder: the Finder-style dialog starts in the destination share as mounted on this
+  // computer; the choice is turned back into a folder path inside that share (the NAS decides what is allowed).
+  ipcMain.handle('harbor:browseNas', async (_e, label) => {
+    const base = ['/Volumes', path.join(os.homedir(), 'Volumes')].map((d) => path.join(d, String(label || ''))).find((d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } });
+    if (!base) return { error: `Open the "${label}" share on this computer first (Finder > Go > Connect to Server), then try again.` };
+    const r = await dialog.showOpenDialog(promptWin && promptWin.isFocused() ? promptWin : win, { properties: ['openDirectory', 'createDirectory'], defaultPath: base, title: `Choose a folder in ${label}` });
+    if (r.canceled) return null;
+    const rel = path.relative(base, r.filePaths[0]).split(path.sep).filter(Boolean);
+    if (rel[0] === '..' || path.isAbsolute(path.relative(base, r.filePaths[0]))) return { error: `Pick a folder inside ${label}.` };
+    if (!rel.length) return { error: `Pick a folder inside ${label}, not the share itself.` };
+    return { project: rel.join('/'), exists: true };
   });
 
   ipcMain.handle('harbor:pickLocalDest', async () => {
@@ -309,7 +327,7 @@ function setupIpc() {
   // Playback: the renderer names a clip by card + relative path; only files in the card's manifest resolve.
   const clipFile = (fingerprint, rel) => {
     const manifest = latest.cards.get(fingerprint);
-    const f = manifest && manifest.files.find((x) => x.relative_path === rel && playback.PLAYABLE.has(x.media_type));
+    const f = manifest && manifest.files.find((x) => x.relative_path === rel && playback.PREVIEWABLE.has(x.media_type));
     if (!f) throw new Error('That clip is not on the card.');
     const root = playback.findCardRoot(manifest, { override: (store.settings().cardRoots || {})[fingerprint] });
     return { manifest, f, root, file: root && playback.clipPath(root, rel) };
@@ -322,7 +340,7 @@ function setupIpc() {
     const token = crypto.randomBytes(12).toString('hex');
     if (mediaTokens.size > 50) mediaTokens.clear();
     mediaTokens.set(token, file);
-    return { mounted: true, url: `harbor-media://clip/${token}`, inside: playback.canPlayInside(rel), look };
+    return { mounted: true, url: `harbor-media://clip/${token}`, inside: playback.canPlayInside(rel), look, image: playback.isImage(rel) };
   });
 
   ipcMain.handle('harbor:connectCard', async (_e, fingerprint) => {
@@ -386,7 +404,8 @@ function registerMediaProtocol() {
     let size;
     try { size = file && fs.statSync(file).size; } catch (e) { size = null; }
     if (!size) return new Response(null, { status: 404 });
-    const type = /\.(mp3|wav|m4a|aac)$/i.test(file) ? 'audio/mp4' : 'video/mp4';
+    const type = /\.jpe?g$/i.test(file) ? 'image/jpeg' : /\.png$/i.test(file) ? 'image/png' : /\.gif$/i.test(file) ? 'image/gif' : /\.webp$/i.test(file) ? 'image/webp'
+      : /\.(mp3|wav|m4a|aac)$/i.test(file) ? 'audio/mp4' : 'video/mp4';
     const base = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*' };
     const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('range') || '');
     if (!m) return new Response(Readable.toWeb(fs.createReadStream(file)), { status: 200, headers: { ...base, 'Content-Length': String(size) } });
@@ -471,6 +490,7 @@ else {
   app.on('second-instance', showWindow);
   app.whenReady().then(() => {
     store = new Store(app.getPath('userData'));
+    applyTheme();
     registerThumbProtocol();
     registerMediaProtocol();
     setupIpc();

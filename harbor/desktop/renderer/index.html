@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data: harbor-thumb:; media-src harbor-media:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data: harbor-thumb: harbor-media:; media-src harbor-media:;">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Harbor</title>
   <link rel="stylesheet" href="style.css">
@@ -15,12 +15,11 @@
     <button id="btn-settings" class="ghost">Settings</button>
   </header>
   <div id="banner" class="banner hidden"></div>
+  <div id="drive-notice" class="banner info hidden"></div>
   <main>
     <nav>
       <h3>Cards</h3>
       <ul id="card-list" class="list"></ul>
-      <h3>USB drives</h3>
-      <ul id="volume-list" class="list"></ul>
       <h3>Recent jobs</h3>
       <ul id="job-list" class="list"></ul>
     </nav>

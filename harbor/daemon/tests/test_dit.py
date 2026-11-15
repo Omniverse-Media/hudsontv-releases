@@ -101,3 +101,25 @@ def test_ingest_that_does_not_fit_is_refused_up_front(env):
     st = env.status(t["ticket_id"])
     assert st["state"] == "failed" and "not enough space" in st["error"]
     assert not os.path.exists(os.path.join(env.projects, "ShootA"))
+
+
+def test_project_can_be_nested_but_not_escape_or_run_deep(env):
+    from harbor_daemon.pathsafe import PathError, check_project_path
+    assert check_project_path("Client A/Shoot 5") == "Client A/Shoot 5"
+    for bad in ["../evil", "A/../B", "/abs", "A//B", "A/.hidden", "a/b/c/d/e", "", "A/"]:
+        try:
+            check_project_path(bad)
+        except PathError:
+            continue
+        raise AssertionError("accepted " + bad)
+
+
+def test_nested_project_ingests_under_both_folders(env):
+    env.sony_card()
+    d = env.daemon()
+    d.tick()
+    t = env.ticket(project="Client A/Shoot 5")
+    env.submit(t)
+    d.tick()
+    assert env.status(t["ticket_id"])["state"] == "done"
+    assert os.path.isdir(os.path.join(env.projects, "Client A", "Shoot 5"))

@@ -23,6 +23,22 @@
     return null;
   }
   
+  // A project folder, optionally nested ("Client A/Shoot 5"): up to 4 folders, each a valid name.
+  function checkProjectPath(path) {
+    const n = (path || '').trim();
+    if (!n) return 'Enter a project name.';
+    const parts = n.split('/');
+    if (parts.length > 4) return 'Project folders can be nested at most 4 deep.';
+    for (const part of parts) {
+      if (!part.trim()) return 'Project path has an empty folder name.';
+      if (part === '.' || part === '..') return 'Project path cannot contain . or .. folders.';
+      const e = checkProjectName(part);
+      if (e) return e.replace('Project name', 'Folder name');
+    }
+    if (new TextEncoder().encode(n).length > 400) return 'Project path is too long.';
+    return null;
+  }
+
   function checkSubfolder(p) {
     if (!p || /[\x00-\x1f\\]/.test(p) || p.startsWith('/') || /^[A-Za-z]:/.test(p)) return 'must be a relative folder path using /';
     if (p.split('/').some((s) => s === '' || s === '.' || s === '..')) return 'cannot contain empty, . or .. parts';
@@ -70,5 +86,5 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
 
-  return { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified, withSidecars, rollPrefix, dayFolder };
+  return { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkProjectPath, checkSubfolder, sanitizeSubfolders, allVerified, withSidecars, rollPrefix, dayFolder };
 }));

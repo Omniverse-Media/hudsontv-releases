@@ -39,6 +39,23 @@ def check_component(name):
     return name
 
 
+MAX_PROJECT_DEPTH = 4
+
+
+def check_project_path(name):
+    """A project folder, optionally nested ("Client/Shoot 5"): 1 to 4 components, each a valid single name."""
+    if not isinstance(name, str) or not name.strip():
+        raise PathError("name must be a non-empty string")
+    parts = name.split("/")
+    if len(parts) > MAX_PROJECT_DEPTH:
+        raise PathError("project path is nested more than %d folders deep" % MAX_PROJECT_DEPTH)
+    for part in parts:
+        check_component(part)
+    if len(name.encode("utf-8")) > 400:
+        raise PathError("name too long")
+    return name
+
+
 def resolve_within(base, rel):
     """Join base/rel and resolve symlinks; the result must stay inside base.
 

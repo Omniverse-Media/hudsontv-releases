@@ -89,3 +89,11 @@ test('refuses without room, without a card, or when the destination is on the ca
   assert.equal((await runLocalIngest(job({ project: '../x' }))).state, 'failed');
   assert.equal(inspectDest('/definitely/not/here/yet').exists, false);
 });
+
+test('a nested project path lands in nested folders', async () => {
+  const { dest, job } = await setup();
+  const r = await runLocalIngest(job({ project: 'Client A/Shoot 5', dit: null }));
+  assert.equal(r.state, 'done');
+  assert.ok(fs.existsSync(path.join(dest, 'Client A', 'Shoot 5', 'Footage/Video', 'C1.MP4')));
+  assert.equal((await runLocalIngest(job({ project: 'A/../B' }))).state, 'failed');
+});

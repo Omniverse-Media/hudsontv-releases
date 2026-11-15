@@ -40,6 +40,9 @@ test('buildTicket produces the spec shape from the manifest', () => {
 
 test('buildTicket refuses bad input before anything reaches the share', () => {
   assert.throws(() => buildTicket(base(manifest(), { projectName: '../evil' })), /cannot contain/);
+  assert.throws(() => buildTicket(base(manifest(), { projectName: 'a//b' })), /empty folder/);
+  assert.throws(() => buildTicket(base(manifest(), { projectName: 'a/b/c/d/e' })), /nested at most/);
+  assert.equal(buildTicket(base(manifest(), { projectName: 'Client A/Shoot 5' })).destination.project_name, 'Client A/Shoot 5');
   assert.throws(() => buildTicket(base(manifest(), { projectName: '' })), /project name/i);
   assert.throws(() => buildTicket(base(manifest(), { selected: [] })), /at least one/);
   assert.throws(() => buildTicket(base(manifest(), { selected: ['nope'] })), /no longer in the manifest/);

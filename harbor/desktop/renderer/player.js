@@ -82,6 +82,7 @@
       return dlg.showModal();
     }
     if (!res.mounted) return connectPanel(h, dlg, fingerprint, file, res, onLook);
+    if (file.media_type === 'photo') return photoView({ h, dlg, fingerprint, file, res, name, external, close });
 
     const video = h('video', { crossorigin: 'anonymous', preload: 'auto', playsinline: true });
     const canvas = h('canvas', { class: 'screen' });
@@ -156,6 +157,30 @@
     video.play().catch(() => {});
   }
 
+  // Photos: the original when the viewer can draw it (JPEG, PNG, WebP, GIF); for camera RAW, the preview the NAS
+  // already extracted from the file, clearly labelled.
+  function photoView({ h, dlg, fingerprint, file, res, name, external, close }) {
+    const status = h('div', { class: 'meta' });
+    const preview = file.thumb ? `harbor-thumb://card/${encodeURIComponent(fingerprint)}/${encodeURIComponent(file.thumb)}` : null;
+    const stage = h('div', { class: 'stage photo' });
+    const showPreview = () => {
+      if (!preview) { stage.replaceChildren(h('div', { class: 'noplay' }, h('p', {}, `Harbor can't show this photo's format (${(name.split('.').pop() || '').toUpperCase()}).`), h('button', { onclick: external }, 'Open in default app'))); return; }
+      stage.replaceChildren(h('img', { src: preview, alt: name }));
+      status.textContent = 'Showing the preview stored in the file. Open in default app for the full image.';
+    };
+    if (res.image) {
+      const img = h('img', { src: res.url, alt: name });
+      img.addEventListener('error', showPreview);
+      stage.replaceChildren(img);
+    } else showPreview();
+    dlg.classList.add('player');
+    dlg.addEventListener('close', () => dlg.classList.remove('player'), { once: true });
+    dlg.replaceChildren(
+      h('div', { class: 'phead' }, h('h3', {}, name), h('div', { class: 'spacer' }), h('button', { class: 'ghost', onclick: external }, 'Open in default app'), h('button', { class: 'ghost', onclick: close }, 'Close')),
+      stage, status);
+    dlg.showModal();
+  }
+
   function connectPanel(h, dlg, fingerprint, file, res, onLook) {
     const msg = h('p', { class: 'meta' });
     const retry = async (tries) => {
@@ -164,7 +189,7 @@
       if (tries > 0 && dlg.open) setTimeout(() => retry(tries - 1), 1500);
       else if (dlg.open) msg.textContent = 'Still not connected. If Finder asked for a login, use the same one as the Harbor share, or choose the folder yourself.';
     };
-    dlg.replaceChildren(h('h3', {}, 'Connect the card to play clips'),
+    dlg.replaceChildren(h('h3', {}, 'Connect the card to preview it'),
       h('p', {}, `The card is plugged into the NAS. To play its clips on this Mac, Harbor opens the card's network share${res.share ? ` (${res.share})` : ''} once. It is read the same way as any other share, and nothing on the card changes.`),
       msg,
       h('div', { class: 'actions' },

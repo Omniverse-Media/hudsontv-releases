@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { checkProjectName, rollPrefix } = require('./logic');
+const { checkProjectName, checkProjectPath, rollPrefix } = require('./logic');
 const { clipPath } = require('./playback');
 
 const CHUNK = 4 * 1024 * 1024;
@@ -42,7 +42,7 @@ async function hashStream(src, out, onBytes, signal) {
 
 // Where the files will go on this computer, so the UI can show the path before anything is copied.
 function layout({ destRoot, project, dit, roll, subfolderMap, relDir, mediaType }) {
-  const base = path.join(destRoot, project.trim());
+  const base = path.join(destRoot, ...project.trim().split('/'));
   if (dit) return path.join(base, dit.day, dit.group, roll, ...relDir.split('/').filter(Boolean));
   return path.join(base, ...(subfolderMap[mediaType] || 'Footage/Other').split('/'));
 }
@@ -93,7 +93,7 @@ async function runLocalIngest(job, onUpdate = () => {}, signal = null) {
   const emit = () => { L.progress = progressOf(L); onUpdate(L); };
   const fail = (state, message) => { L.state = state; L.message = message; emit(); return L; };
 
-  const err = checkProjectName(job.project);
+  const err = checkProjectPath(job.project);
   if (err) return fail('failed', err);
   if (job.dit) for (const v of [job.dit.day, job.dit.group]) { const e = checkProjectName(v); if (e) return fail('failed', 'Day or group name is not valid.'); }
   if (!job.destRoot || !path.isAbsolute(job.destRoot)) return fail('failed', 'Choose a folder on this computer.');
@@ -108,7 +108,7 @@ async function runLocalIngest(job, onUpdate = () => {}, signal = null) {
   const mediaOf = (rel) => ((job.manifest.files.find((x) => x.relative_path === rel) || {}).media_type) || 'other';
   try {
     if (job.dit) {
-      const gdir = path.join(job.destRoot, job.project.trim(), job.dit.day, job.dit.group);
+      const gdir = path.join(job.destRoot, ...job.project.trim().split('/'), job.dit.day, job.dit.group);
       L.roll = assignRoll(gdir, job.manifest.card.fingerprint, job.dit.roll_prefix || rollPrefix(job.dit.group));
     }
     L.files = job.selection.map((f) => ({ relative_path: f.relative_path, size: f.size, state: 'pending', dest: null, checksum: null, done: 0 }));
@@ -126,9 +126,9 @@ async function runLocalIngest(job, onUpdate = () => {}, signal = null) {
       try { s = await fsp.stat(src); } catch (e) { return fail('paused', 'The card went away (pulled or asleep). Reconnect it and resume; finished files are kept.'); }
       if (s.size !== sel.size) { st.state = 'failed'; st.error = 'file changed on the card'; emit(); continue; }
       const dir = layout({ destRoot: job.destRoot, project: job.project, dit: job.dit, roll: L.roll, subfolderMap: job.subfolderMap || {}, relDir: path.posix.dirname(sel.relative_path) === '.' ? '' : path.posix.dirname(sel.relative_path), mediaType: mediaOf(sel.relative_path) });
-      if (!within(path.join(job.destRoot, job.project.trim()), path.join(dir, 'x'))) { st.state = 'failed'; st.error = 'path leaves the project folder'; emit(); continue; }
+      if (!within(path.join(job.destRoot, ...job.project.trim().split('/')), path.join(dir, 'x'))) { st.state = 'failed'; st.error = 'path leaves the project folder'; emit(); continue; }
       await fsp.mkdir(dir, { recursive: true });
-      L.dir = L.dir || (job.dit ? path.join(job.destRoot, job.project.trim(), job.dit.day, job.dit.group, L.roll) : path.join(job.destRoot, job.project.trim()));
+      L.dir = L.dir || (job.dit ? path.join(job.destRoot, ...job.project.trim().split('/'), job.dit.day, job.dit.group, L.roll) : path.join(job.destRoot, ...job.project.trim().split('/')));
       let final = path.join(dir, path.basename(sel.relative_path));
       const want = sel.checksum && sel.checksum.startsWith('xxh64:') ? sel.checksum : null;
 

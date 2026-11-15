@@ -1,9 +1,9 @@
 'use strict';
 const crypto = require('node:crypto');
-const { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, allVerified, rollPrefix } = require('./logic');
+const { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkProjectPath, checkSubfolder, sanitizeSubfolders, allVerified, rollPrefix } = require('./logic');
 
 function buildTicket({ manifest, selected, projectName, approvedRoot, subfolderMap, clearCard, origin, dit = null, now = new Date() }) {
-  const err = checkProjectName(projectName);
+  const err = checkProjectPath(projectName);
   if (err) throw new Error(err);
   if (!approvedRoot) throw new Error('Choose a destination root.');
   if (manifest.checksum_state !== 'complete') throw new Error('The card is still being scanned. Wait for checksums to finish.');
@@ -42,4 +42,4 @@ function buildTicket({ manifest, selected, projectName, approvedRoot, subfolderM
   };
 }
 
-module.exports = { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkSubfolder, sanitizeSubfolders, buildTicket, allVerified };
+module.exports = { MEDIA, DEFAULT_SUBFOLDERS, checkProjectName, checkProjectPath, checkSubfolder, sanitizeSubfolders, buildTicket, allVerified };

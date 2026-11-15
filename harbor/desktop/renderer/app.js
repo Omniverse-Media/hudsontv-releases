@@ -43,7 +43,7 @@ async function init() {
   window.harbor.onEvent(onEvent);
   $('btn-settings').addEventListener('click', openSettings);
   const present = [...S.cards.values()].filter((m) => m.present && m.role !== 'ignored');
-  const first = present.find(isCard) || present[0];
+  const first = present.find(isCard);
   if (first) S.view = viewFor(first);
   if (!S.settings.shareRoot) openSettings();
   renderAll();
@@ -55,7 +55,7 @@ function onEvent({ type, payload }) {
     const fp = m.card.fingerprint;
     S.cards.set(fp, m);
     if (S.pendingRole.get(fp) === (m.role === 'card' ? 'card' : 'ignore')) S.pendingRole.delete(fp);
-    if (!S.view && m.present && m.role !== 'ignored') S.view = viewFor(m);
+    if (!S.view && m.present && isCard(m)) S.view = viewFor(m);
     // A volume the user just marked as a card moves from the drive list to the card list.
     if (S.view && S.view.id === fp && S.view.kind !== 'job') S.view = viewFor(m);
   } else if (type === 'card-gone') S.cards.delete(payload);
@@ -73,6 +73,8 @@ function renderAll() {
   pill.textContent = !S.share.ok ? 'NAS not connected' : S.daemon.online ? 'NAS online' : 'Harbor on the NAS is not running';
   pill.className = 'pill ' + (S.share.ok && S.daemon.online ? 'on' : 'off');
   renderBanner();
+  renderDriveNotice();
+  if (S.onDrives) S.onDrives();
   renderNav();
   renderView();
 }
@@ -103,6 +105,18 @@ function renderBanner() {
   } else b.className = 'banner hidden';
 }
 
+// Only drives still waiting for a decision interrupt the main window; every other drive lives in Settings.
+function renderDriveNotice() {
+  const b = $('drive-notice');
+  const ask = [...S.cards.values()].filter((m) => m.present && m.role === 'unassigned' && !S.pendingRole.has(m.card.fingerprint));
+  if (!ask.length) { b.className = 'banner info hidden'; return; }
+  b.className = 'banner info';
+  b.replaceChildren(...ask.map((m) => h('div', { class: 'driverow' },
+    h('span', {}, `New USB drive “${m.card.label || m.card.fingerprint}”${m.card.total_bytes ? ' (' + fmtBytes(m.card.total_bytes) + ')' : ''} was plugged into the NAS. Is it a card to ingest from?`),
+    h('button', { onclick: () => chooseRole(m.card.fingerprint, 'card') }, 'Use as card'),
+    h('button', { class: 'ghost', onclick: () => chooseRole(m.card.fingerprint, 'ignore') }, 'Not a card'))));
+}
+
 function renderNav() {
   const cl = $('card-list'); cl.replaceChildren();
   const present = [...S.cards.values()].filter((m) => m.present);
@@ -114,16 +128,6 @@ function renderNav() {
     cl.append(h('li', { class: sel('card', m.card.fingerprint), onclick: () => { S.view = { kind: 'card', id: m.card.fingerprint }; renderAll(); } },
       h('div', { class: 't' }, m.card.label || m.card.fingerprint),
       h('div', { class: 's' }, `${recent} new · ${media.length} items`)));
-  }
-  const vl = $('volume-list'); vl.replaceChildren();
-  // New drives first: they are waiting for a decision.
-  const volumes = present.filter((m) => !isCard(m)).sort((a, b) => (a.role === 'unassigned' ? 0 : 1) - (b.role === 'unassigned' ? 0 : 1));
-  if (!volumes.length) vl.append(h('div', { class: 'empty' }, 'No other USB drives'));
-  for (const m of volumes) {
-    const ask = m.role === 'unassigned';
-    vl.append(h('li', { class: sel('volume', m.card.fingerprint) + (ask ? ' ask' : ''), onclick: () => { S.view = viewFor(m); renderAll(); } },
-      h('div', { class: 't' }, m.card.label || m.card.fingerprint),
-      h('div', { class: 's' }, `${ask ? 'Card or server drive?' : 'Not a card'}${m.card.total_bytes ? ' · ' + fmtBytes(m.card.total_bytes) : ''}`)));
   }
   const jl = $('job-list'); jl.replaceChildren();
   if (!S.history.length) jl.append(h('div', { class: 'empty' }, 'No jobs yet'));
@@ -281,19 +285,20 @@ function tile(fp, f, ui) {
   const pic = f.thumb ? thumbImg(`harbor-thumb://card/${encodeURIComponent(fp)}/${encodeURIComponent(f.thumb)}`)
     : h('div', { class: 'ph ' + f.media_type }, playable(f) ? null : h('span', { class: 'ico' }, TYPE_ICON[f.media_type] || '•'),
       playable(f) ? null : h('span', { class: 'ext' }, (f.relative_path.split('.').pop() || '').toUpperCase()));
-  return h('div', { class: 'tile' + (on ? ' on' : '') + (f.recent ? ' recent' : ''), title: playable(f) ? `${f.relative_path}\nDouble-click to play` : f.relative_path,
-    onclick: toggle, ondblclick: playable(f) ? (e) => { e.preventDefault(); playClip(fp, f); } : null },
+  return h('div', { class: 'tile' + (on ? ' on' : '') + (f.recent ? ' recent' : ''), title: previewable(f) ? `${f.relative_path}\nDouble-click to ${playable(f) ? 'play' : 'preview'}` : f.relative_path,
+    onclick: toggle, ondblclick: previewable(f) ? (e) => { e.preventDefault(); playClip(fp, f); } : null },
     h('div', { class: 'pic' }, pic,
       h('span', { class: 'check' }, on ? '✓' : ''),
       f.recent ? h('span', { class: 'badge new' }, 'NEW') : null,
       f.duration != null ? h('span', { class: 'badge dur' }, fmtDur(f.duration)) : null,
-      playable(f)
-        ? h('button', { class: 'playbtn', title: 'Play', onclick: (e) => { e.stopPropagation(); playClip(fp, f); } }, '▶') : null),
+      previewable(f)
+        ? h('button', { class: 'playbtn', title: playable(f) ? 'Play' : 'Preview', onclick: (e) => { e.stopPropagation(); playClip(fp, f); } }, playable(f) ? '▶' : '⤢') : null),
     h('div', { class: 'name' }, f.filename || f.relative_path.split('/').pop()),
     h('div', { class: 'meta' }, `${fmtClock(f.timestamp)} · ${fmtBytes(f.size)}`));
 }
 
 const playable = (f) => f.media_type === 'video' || f.media_type === 'audio';
+const previewable = (f) => playable(f) || f.media_type === 'photo';
 
 function playClip(fp, f) {
   window.HarborPlayer.open({ h, fingerprint: fp, file: f, onLook: async (look) => {
@@ -367,7 +372,7 @@ function updateSummary(m) {
   const files = m.files.filter((f) => ui.selected.has(f.relative_path));
   const bytes = files.reduce((a, f) => a + f.size, 0);
   const dit = S.settings.organize !== 'simple';
-  const err = L.checkProjectName(ui.project) || (dit && L.checkProjectName(ui.day) ? 'Enter a day folder name.' : null);
+  const err = L.checkProjectPath(ui.project) || (dit && L.checkProjectName(ui.day) ? 'Enter a day folder name.' : null);
   const btn = $('btn-ingest'); if (!btn) return;
   const dest = destinations().find((d) => d.root === ui.root);
   const free = dest && Number.isFinite(dest.free_bytes) ? dest.free_bytes : null;
@@ -455,6 +460,24 @@ function openSettings() {
   const announce = h('select', {}, [['popup', 'Pop-up window with Ingest options'], ['banner', 'Notification banner (click or "Ingest…" opens it)'],
     ['badge', 'Quiet: Dock and menu-bar badge only'], ['off', 'Don’t announce']].map(([v, t]) => h('option', { value: v, selected: v === cur }, t)));
   const sound = h('input', { type: 'checkbox', checked: S.settings.announceSound !== false });
+  const theme = h('select', { onchange: async () => { S.settings = await window.harbor.saveSettings({ theme: theme.value }); } },
+    [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto (match this computer)']].map(([v, t]) => h('option', { value: v, selected: v === (S.settings.theme || 'dark') }, t)));
+  // Every USB drive the NAS sees, with the role Harbor remembers for it: cards show in the sidebar, the rest stay here.
+  const drives = h('div', { class: 'drives' });
+  const drawDrives = () => {
+    const vols = [...S.cards.values()].filter((m) => m.present).sort((a, b) => (isCard(b) ? 1 : 0) - (isCard(a) ? 1 : 0) || (a.card.label || '').localeCompare(b.card.label || ''));
+    drives.replaceChildren(...(vols.length ? vols.map((m) => {
+      const fp = m.card.fingerprint; const pend = S.pendingRole.has(fp);
+      const role = m.role === 'unassigned' ? 'Waiting for your choice' : isCard(m) ? 'Card' : 'Not a card';
+      return h('div', { class: 'driveitem' },
+        h('div', {}, h('div', { class: 't' }, m.card.label || fp), h('div', { class: 'meta' }, `${role}${m.card.total_bytes ? ' · ' + fmtBytes(m.card.total_bytes) : ''}${m.card.fstype ? ' · ' + m.card.fstype : ''}`)),
+        h('span', { class: 'spacer' }),
+        pend ? h('span', { class: 'meta' }, 'Applying…') : h('span', { class: 'seg' },
+          h('button', { class: isCard(m) ? 'on' : '', onclick: () => chooseRole(fp, 'card') }, 'Use as card'),
+          h('button', { class: !isCard(m) && m.role !== 'unassigned' ? 'on' : '', onclick: () => chooseRole(fp, 'ignore') }, 'Not a card')));
+    }) : [h('div', { class: 'meta' }, S.share.ok ? 'No USB drives are plugged into the NAS.' : 'Connect to the NAS to see its USB drives.')]));
+  };
+  drawDrives(); S.onDrives = drawDrives;
   const user = h('input', { type: 'text', value: S.settings.user });
   const machine = h('input', { type: 'text', value: S.settings.machine });
   const folders = {};
@@ -463,14 +486,19 @@ function openSettings() {
     h('p', { class: 'meta' }, 'Choose the mapped Harbor share. Harbor talks to the NAS only through files on this share, using your existing SMB login.'),
     h('div', { class: 'form', style: 'grid-template-columns:110px 1fr' },
       h('label', {}, 'Harbor share'), h('div', {}, share, ' ', h('button', { class: 'ghost', onclick: async () => { const p = await window.harbor.pickShare(); if (p) share.value = p; } }, 'Browse')),
+      h('label', {}, 'Appearance'), theme,
       h('label', {}, 'New card'), h('div', {}, announce, h('div', { style: 'margin-top:6px' }, h('label', {}, sound, ' Play a sound'), ' ',
         h('button', { class: 'ghost', onclick: () => window.harbor.saveSettings({ announce: announce.value, announceSound: sound.checked }).then((st) => { S.settings = st; return window.harbor.testAnnounce(); }) }, 'Try it'))),
       h('label', {}, 'Your name'), user, h('label', {}, 'This computer'), machine),
+    h('h4', {}, 'USB drives on the NAS'),
+    h('p', { class: 'meta' }, 'Only drives marked as cards appear in the sidebar. Change your mind here at any time; Harbor remembers each drive.'),
+    drives,
     h('p', { class: 'meta' }, 'Inside each project folder, files are sorted into these subfolders:'),
     h('div', { class: 'form', style: 'grid-template-columns:110px 1fr' }, MEDIA.flatMap((t) => [h('label', {}, t), folders[t]])),
-    h('div', { class: 'actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'),
+    h('div', { class: 'actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Close'),
       h('button', { onclick: async () => { const subfolderMap = {}; for (const t of MEDIA) subfolderMap[t] = folders[t].value.trim();
         S.settings = await window.harbor.saveSettings({ announce: announce.value, announceSound: sound.checked, shareRoot: share.value.trim(), user: user.value.trim(), machine: machine.value.trim(), subfolderMap }); dlg.close(); renderAll(); } }, 'Save')));
+  dlg.addEventListener('close', () => { S.onDrives = null; }, { once: true });
   dlg.showModal();
 }
 

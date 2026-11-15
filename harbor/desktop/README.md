@@ -38,3 +38,13 @@ same name is kept as `name (2).ext`), and every file is hashed with xxh64 while 
 checksum) and again after it is written. Finished files are skipped on a re-run, so a pulled card or a sleeping laptop
 just pauses the job and Resume continues. Files that reach this computer are reported to the NAS (`<fingerprint>.local.json`), so the card
 stops offering them as New for everyone.
+
+### Drives, themes, destinations and previews
+* The sidebar lists only drives marked as cards. Every other USB drive on the NAS is under Settings > USB drives, where
+  any drive can be switched to a card or back; a brand new drive shows a one-line question at the top until answered.
+* Settings > Appearance: Dark (default), Light, or Auto (follows the computer).
+* In the prompt, **Folder** takes a recent project, a typed name, or a nested path like `Client A/Shoot 5` (up to 4 deep).
+  **Browse NAS…** opens a Finder-style chooser inside the share as mounted on this computer, and can create folders.
+  The NAS still only writes inside the approved roots it publishes.
+* The thumbnail grid plays video and audio and opens photos straight from the card's share (▶ or ⤢, or double-click).
+  Camera RAW photos show the preview stored in the file.

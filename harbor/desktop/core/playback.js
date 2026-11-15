@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const PLAYABLE = new Set(['video', 'audio']);
+// Everything the viewer can open: clips and photos. Photos Chromium can't draw (camera RAW) show the card's own preview.
+const PREVIEWABLE = new Set(['video', 'audio', 'photo']);
+const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
 // Codecs the built-in player can decode. Everything else opens in the Mac's default app.
 const NATIVE_EXT = new Set(['mp4', 'mov', 'm4v', 'mp3', 'wav', 'm4a', 'aac']);
 
@@ -59,6 +62,7 @@ function guessLook(manifest) {
 }
 
 const ext = (rel) => (rel.split('.').pop() || '').toLowerCase();
-const canPlayInside = (rel) => NATIVE_EXT.has(ext(rel));
+const canPlayInside = (rel) => NATIVE_EXT.has(ext(rel)) || IMAGE_EXT.has(ext(rel));
+const isImage = (rel) => IMAGE_EXT.has(ext(rel));
 
-module.exports = { PLAYABLE, cardShareName, clipPath, findCardRoot, smbHost, guessLook, canPlayInside };
+module.exports = { PLAYABLE, PREVIEWABLE, isImage, cardShareName, clipPath, findCardRoot, smbHost, guessLook, canPlayInside };

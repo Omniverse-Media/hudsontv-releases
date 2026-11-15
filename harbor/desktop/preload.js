@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('harbor', {
   localInfo: (fingerprint, dir) => ipcRenderer.invoke('harbor:localInfo', fingerprint, dir),
   resumeLocal: (id) => ipcRenderer.invoke('harbor:resumeLocal', id),
   revealLocal: (id) => ipcRenderer.invoke('harbor:revealLocal', id),
+  browseNas: (label) => ipcRenderer.invoke('harbor:browseNas', label),
   testAnnounce: () => ipcRenderer.invoke('harbor:testAnnounce'),
   onEvent: (cb) => {
     const fn = (_e, msg) => cb(msg);

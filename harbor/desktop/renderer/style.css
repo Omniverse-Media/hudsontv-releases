@@ -144,3 +144,13 @@ dialog.player > .meta { margin-top: 6px; min-height: 1em; }
 .ingestbar .space { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .ingestbar .space.low { color: #b54708; }
 .ingestbar .space.bad { color: #b42318; font-weight: 700; }
+.banner.info { background: var(--panel); color: var(--text); border-bottom: 1px solid var(--line); flex-direction: column; align-items: stretch; gap: 8px; }
+.driverow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-weight: 500; }
+.driverow span { flex: 1; min-width: 240px; }
+h4 { margin: 16px 0 4px; font-size: 14px; }
+.drives { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; max-height: 190px; overflow: auto; }
+.driveitem { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.driveitem .t { font-weight: 600; }
+.stage.photo { display: grid; place-items: center; background: #000; min-height: 320px; }
+.stage.photo img { max-width: 100%; max-height: 70vh; object-fit: contain; }
+dialog.player .stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }

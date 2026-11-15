@@ -3,7 +3,7 @@
 const L = window.HarborLogic;
 const S = { settings: null, daemon: { online: false, info: null }, cards: new Map(), statuses: new Map(), history: [], prompt: { fingerprint: null, claim: null },
   scope: 'new', project: '', root: '', group: '', day: '', dayEdited: false, groupEdited: false, mine: null, busy: false, error: null, fp: null,
-  mode: 'nas', localRoot: '', local: null, localJobs: new Map(), mineLocal: null };
+  mode: 'nas', browsed: false, localRoot: '', local: null, localJobs: new Map(), mineLocal: null };
 
 const $root = () => document.getElementById('root');
 function h(tag, attrs, ...kids) {
@@ -122,7 +122,7 @@ function build() {
   const groups = S.settings.groups || [];
   const withThumb = sel.files.filter((f) => f.thumb).slice(0, 8);
 
-  const strip = h('div', { class: 'strip' }, withThumb.map((f) => h('div', { class: 'th' },
+  const strip = h('div', { class: 'strip' }, withThumb.map((f) => h('div', { class: 'th', title: 'Open in Harbor to preview', onclick: () => window.harbor.openMain(S.fp) },
     h('img', { src: `harbor-thumb://card/${encodeURIComponent(S.fp)}/${encodeURIComponent(f.thumb)}`, alt: '', draggable: 'false' }))),
     sel.files.length > withThumb.length ? h('div', { class: 'th more' }, `+${sel.files.length - withThumb.length}`) : null);
 
@@ -136,8 +136,9 @@ function build() {
   } });
 
   const form = h('div', { class: 'card' },
-    h('label', { class: 'f' }, 'Project', h('input', { id: 'f-project', type: 'text', list: projectList, placeholder: 'Pick an existing project or type a new name', value: S.project,
-      oninput: (e) => { S.project = e.target.value; refresh(); } }), h('datalist', { id: projectList }, [...new Set([...(usesNas() ? dest.projects : []), ...(usesLocal() && S.local ? S.local.projects || [] : [])])].map((p) => h('option', { value: p })))),
+    h('label', { class: 'f' }, 'Folder', h('div', { class: 'pick' }, h('input', { id: 'f-project', type: 'text', list: projectList, placeholder: 'Pick a recent project, type a name, or Browse… (use / for subfolders)', value: S.project,
+      oninput: (e) => { S.project = e.target.value; S.browsed = false; refresh(); } }),
+      usesNas() ? h('button', { class: 'ghost small', title: 'Choose or create a folder on the NAS share', onclick: browseNas }, 'Browse NAS…') : null), h('datalist', { id: projectList }, [...new Set([...(usesNas() ? dest.projects : []), ...(usesLocal() && S.local ? S.local.projects || [] : [])])].map((p) => h('option', { value: p })))),
     h('div', { class: 'f' }, 'Save to', h('div', { class: 'seg wide' },
       [['nas', 'NAS server'], ['local', 'This computer'], ['both', 'Both']].map(([v, t]) => h('button', { class: S.mode === v ? 'on' : '', onclick: () => { S.mode = v; S.error = null; loadLocal(); render(); } }, t)))),
     h('div', { class: 'row2' },
@@ -185,21 +186,22 @@ function refresh() {
   const name = S.project.trim();
   const dests = destinations();
   const dest = dests.find((d) => d.root === S.root);
-  const exists = !!(dest && dest.projects.includes(name));
+  const exists = S.browsed || !!(dest && dest.projects.includes(name));
+  const nested = name.includes('/');
   const free = dest && Number.isFinite(dest.free_bytes) ? dest.free_bytes : null;
   const tooBig = usesNas() && free != null && bytes + 2 * 1024 ** 3 > free;
   const loc = S.local;
   const lfree = loc && Number.isFinite(loc.free) ? loc.free : null;
   const lBig = usesLocal() && lfree != null && bytes + 1024 ** 3 > lfree;
   const lBad = usesLocal() && (!S.localRoot ? 'Choose a folder on this computer.' : loc && !loc.writable ? 'This computer can’t write there. Pick another folder.' : loc && !loc.cardMounted ? 'Connect the card to this computer first.' : null);
-  const err = L.checkProjectName(S.project) || (dit && L.checkProjectName(S.day) ? 'Enter a day folder name.' : null);
+  const err = L.checkProjectPath(S.project) || (dit && L.checkProjectName(S.day) ? 'Enter a day folder name.' : null);
   go.disabled = S.busy || !files.length || !!err || tooBig || lBig || !!lBad || m.checksum_state !== 'complete' || (usesNas() && (!S.daemon.online || !S.root));
   go.textContent = !files.length ? 'Nothing to ingest' : `Ingest ${files.length} file${files.length === 1 ? '' : 's'} · ${fmtBytes(bytes)}`;
   const tail = dit ? ` › ${S.day.trim()} › ${S.group} › next ${L.rollPrefix(S.group)} roll` : '';
   const where = document.getElementById('where');
   if (where) where.textContent = !name ? 'Choose where these files go, then Ingest.' : err ? err : lBad ? lBad
-    : [usesNas() ? `NAS: ${dest ? dest.label : S.root} › ${name}${exists ? '' : ' (new folder)'}${tail}` : null,
-      usesLocal() ? `This computer: ${S.localRoot} › ${name}${loc && loc.projects && loc.projects.includes(name) ? '' : ' (new folder)'}${tail}` : null].filter(Boolean).join('\n');
+    : [usesNas() ? `NAS: ${dest ? dest.label : S.root} › ${name.split('/').join(' › ')}${exists || nested ? '' : ' (new folder)'}${tail}` : null,
+      usesLocal() ? `This computer: ${S.localRoot} › ${name.split('/').join(' › ')}${nested || (loc && loc.projects && loc.projects.includes(name)) ? '' : ' (new folder)'}${tail}` : null].filter(Boolean).join('\n');
   const space = document.getElementById('space');
   if (space) {
     space.textContent = !S.daemon.online ? 'The NAS isn’t responding right now.' : free == null ? '' : tooBig ? `Won’t fit on the NAS: only ${fmtBytes(free)} free on ${dest.label}` : `${fmtBytes(free)} free on ${dest.label}`;
@@ -210,6 +212,17 @@ function refresh() {
     ls.textContent = lBad && S.localRoot ? lBad : lfree == null ? '' : lBig ? `Won’t fit on this computer: ${fmtBytes(lfree)} free` : `${fmtBytes(lfree)} free on this computer`;
     ls.className = 'hintline' + ((lBad && S.localRoot) || lBig ? ' bad' : lfree != null && lfree < 100 * 1024 ** 3 ? ' low' : '');
   }
+}
+
+// Finder-style folder chooser on the NAS share mounted on this computer. The NAS still enforces its approved roots.
+async function browseNas() {
+  const dest = destinations().find((d) => d.root === S.root) || destinations()[0];
+  if (!dest) return;
+  S.error = null;
+  const r = await window.harbor.browseNas(dest.label).catch((e) => ({ error: clean(e) }));
+  if (!r) return;
+  if (r.error) { S.error = r.error; render(); return; }
+  S.project = r.project; S.browsed = true; render();
 }
 
 async function submit() {

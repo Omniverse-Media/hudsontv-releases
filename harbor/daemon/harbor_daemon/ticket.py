@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from . import hashing
-from .pathsafe import PathError, check_component, check_relpath, resolve_within
+from .pathsafe import PathError, check_component, check_project_path, check_relpath, resolve_within
 from .profiles import MEDIA_TYPES
 
 _FP = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -99,7 +99,7 @@ def validate(raw, cfg, filename_id=None):
     approved_root = _req(dest, "approved_root", str, "destination")
     subfolder_map = _req(dest, "subfolder_map", dict, "destination")
     try:
-        check_component(project_name)
+        check_project_path(project_name)
     except PathError as e:
         raise TicketError("project_name: %s" % e)
 
