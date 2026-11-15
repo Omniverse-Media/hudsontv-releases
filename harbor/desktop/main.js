@@ -10,6 +10,7 @@ const { Poller } = require('./core/poller');
 const { Store } = require('./core/store');
 const playback = require('./core/playback');
 const localcopy = require('./core/localcopy');
+const announce = require('./core/announce');
 const { execFile, execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
@@ -71,26 +72,55 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
-function notifyCard(manifest) {
-  if (manifest.role === 'ignored') return;
-  // A card ready to ingest gets the prompt window (unless turned off); other cases keep the system notification.
-  if ((!manifest.role || manifest.role === 'card') && store.settings().dockPrompt !== false) { showPrompt(manifest); return; }
-  if (!Notification.isSupported()) return;
-  if (manifest.role === 'unassigned') {
-    const n = new Notification({
-      title: 'USB drive found on the NAS',
-      body: `${manifest.card.label || manifest.card.fingerprint}: is this a card to ingest? Choose in Harbor.`,
-    });
-    n.on('click', showWindow);
-    n.show();
-    return;
+// Cards announced but not yet acted on: drives the dock badge and the tray entry.
+const waiting = new Map(); // fingerprint -> label
+function refreshBadge() {
+  const mode = announce.announceMode(store.settings());
+  const n = mode === 'off' ? 0 : waiting.size;
+  if (process.platform === 'darwin' && app.dock) app.dock.setBadge(announce.badgeText(n));
+  else if (app.setBadgeCount) app.setBadgeCount(n);
+  if (tray) {
+    if (process.platform === 'darwin') tray.setTitle(n ? ` ${n}` : '');
+    tray.setToolTip(n ? `Harbor: ${n} card${n === 1 ? '' : 's'} waiting` : 'Harbor');
+    tray.setContextMenu(trayMenu());
   }
+}
+function clearWaiting(fp) { if (waiting.delete(fp)) refreshBadge(); }
+function trayMenu() {
+  const cards = [...waiting].map(([fp, label]) => ({ label: `Ingest ${label}…`, click: () => { const m = latest.cards.get(fp); if (m) showPrompt(m); else showWindow(); } }));
+  return Menu.buildFromTemplate([...cards, ...(cards.length ? [{ type: 'separator' }] : []),
+    { label: 'Open Harbor', click: showWindow }, { type: 'separator' }, { label: 'Quit', click: () => app.quit() }]);
+}
+
+// The user chooses how a docked card shows up: pop-up window, system banner with buttons, badge only, or nothing.
+function notifyCard(manifest, { test = false } = {}) {
+  if (manifest.role === 'ignored') return;
+  const settings = store.settings();
+  const mode = announce.announceMode(settings);
+  const sound = announce.soundOn(settings);
+  const isCard = !manifest.role || manifest.role === 'card';
+  const label = manifest.card.label || manifest.card.fingerprint;
+  if (mode === 'off') return;
+  if (isCard && !test) { waiting.set(manifest.card.fingerprint, label); refreshBadge(); }
+  if (mode === 'badge') { if (!isCard && Notification.isSupported()) banner(manifest, label, sound); return; }
+  if (isCard && mode === 'popup') { if (sound) shell.beep(); showPrompt(manifest); return; }
+  if (Notification.isSupported()) banner(manifest, label, sound);
+}
+
+function banner(manifest, label, sound) {
+  const isCard = !manifest.role || manifest.role === 'card';
   const recent = manifest.files.filter((f) => f.recent).length;
   const n = new Notification({
-    title: 'Card detected in Harbor',
-    body: `${manifest.card.label || manifest.card.fingerprint}: ${recent} new file${recent === 1 ? '' : 's'} (${manifest.files.length} total)`,
+    title: isCard ? `${label} docked` : 'USB drive found on the NAS',
+    body: isCard ? `${recent} new file${recent === 1 ? '' : 's'} · ${manifest.files.length} on the card` : `${label}: is this a card to ingest? Choose in Harbor.`,
+    silent: !sound,
+    ...(sound && process.platform === 'darwin' ? { sound: 'Glass' } : {}),
+    ...(isCard ? { actions: [{ type: 'button', text: 'Ingest…' }], closeButtonText: 'Later' } : {}),
   });
-  n.on('click', showWindow);
+  // Clicking the banner or "Ingest…" opens the prompt for that card, the same window as pop-up mode.
+  const go = () => (isCard ? showPrompt(manifest) : showWindow());
+  n.on('click', go);
+  n.on('action', go);
   n.show();
 }
 
@@ -119,6 +149,7 @@ function startLocal(req) {
   });
   if (!selection.length) throw new Error('Select at least one file.');
   const dit = req.dit ? { day: req.dit.day, group: req.dit.group, roll_prefix: require('./core/logic').rollPrefix(req.dit.group) } : null;
+  clearWaiting(req.fingerprint);
   const id = crypto.randomUUID();
   const j = { id, fingerprint: req.fingerprint, project: (req.projectName || '').trim(), label: manifest.card.label || req.fingerprint, destRoot: req.localRoot,
     job: { manifest, selection, destRoot: req.localRoot, project: req.projectName, dit, subfolderMap: req.subfolderMap, origin: origin() }, state: null, aborter: null };
@@ -165,15 +196,22 @@ function setupIpc() {
   ipcMain.handle('harbor:openMain', (_e, fingerprint) => {
     showWindow();
     send('focus-card', fingerprint || null);
+    if (fingerprint) clearWaiting(fingerprint);
     closePrompt();
   });
   ipcMain.handle('harbor:dismissPrompt', () => closePrompt());
+  // "Try it" button in Settings: announces the card on screen (or a sample) the way a real dock would, without a badge.
+  ipcMain.handle('harbor:testAnnounce', () => {
+    const real = [...latest.cards.values()].find((m) => m.present && (!m.role || m.role === 'card'));
+    notifyCard(real || { role: 'card', card: { fingerprint: 'TEST', label: 'Sample card' }, files: [{ recent: true }, { recent: true }, { recent: false }], present: true, checksum_state: 'complete' }, { test: true });
+  });
 
   ipcMain.handle('harbor:saveSettings', (_e, patch) => {
     const allowed = {};
-    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks', 'dockPrompt', 'localRoot', 'destMode']) if (k in patch) allowed[k] = patch[k];
+    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks', 'dockPrompt', 'announce', 'announceSound', 'localRoot', 'destMode']) if (k in patch) allowed[k] = patch[k];
     const s = store.saveSettings(allowed);
     if ('shareRoot' in allowed) poller.tick();
+    if ('announce' in allowed) refreshBadge();
     return s;
   });
 
@@ -233,6 +271,7 @@ function setupIpc() {
     });
     poller.watch(ticket.ticket_id);
     prompt.mineIds.add(ticket.ticket_id);
+    clearWaiting(req.fingerprint);
     return ticket.ticket_id;
   }
 
@@ -391,6 +430,7 @@ function startPoller() {
       if (payload.isNew) notifyCard(payload.manifest);
     } else if (type === 'card-gone') {
       latest.cards.delete(payload);
+      clearWaiting(payload);
       if (payload === prompt.fingerprint && !prompt.mineIds.size && !prompt.claim) closePrompt();
     }
     else if (type === 'ticket') {
@@ -426,12 +466,10 @@ else {
     powerMonitor.on('resume', () => setTimeout(() => { if (poller) poller.tick(); }, 4000));
     tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png')));
     tray.setToolTip('Harbor');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open Harbor', click: showWindow },
-      { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
-    ]));
-    tray.on('click', showWindow);
+    tray.setContextMenu(trayMenu());
+    // With a card waiting, a click on the tray icon goes straight to its prompt.
+    tray.on('click', () => { const fp = [...waiting.keys()][0]; const m = fp && latest.cards.get(fp); if (m) showPrompt(m); else showWindow(); });
+    refreshBadge();
   });
   // Stay in the tray so card notifications keep working with the window closed.
   app.on('window-all-closed', (e) => { if (process.platform === 'darwin') return; });

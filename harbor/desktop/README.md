@@ -22,7 +22,7 @@ list comes from the daemon's `approved_roots`).
 
 ## Card-docked prompt
 When a card is docked on the NAS, every running Harbor desktop opens a small always-on-top window (turn it off in
-Settings > Card prompt). It shows the card, a thumbnail strip, New / Everything, and the same Project / Save to / Day /
+Settings > New card, where you can also pick a system notification banner, a badge only, or nothing, plus sound). It shows the card, a thumbnail strip, New / Everything, and the same Project / Save to / Day /
 Group choices as the main window, with one Ingest button. The NAS copies from the card where it is mounted; the desktop
 only writes a ticket. "Review files…" opens the full thumbnail view for picking individual clips.
 

@@ -260,3 +260,13 @@ test('poller reports tickets any desktop writes, but not ones that predate the a
   p.tick();
   assert.equal(events.length, 1);
 });
+
+test('announce mode: setting wins, old dockPrompt checkbox still respected', () => {
+  const a = require('../core/announce');
+  assert.equal(a.announceMode({}), 'popup');
+  assert.equal(a.announceMode({ dockPrompt: false }), 'banner');
+  assert.equal(a.announceMode({ announce: 'badge', dockPrompt: false }), 'badge');
+  assert.equal(a.announceMode({ announce: 'bogus' }), 'popup');
+  assert.equal(a.soundOn({}), true); assert.equal(a.soundOn({ announceSound: false }), false);
+  assert.equal(a.badgeText(0), ''); assert.equal(a.badgeText(2), '2');
+});
