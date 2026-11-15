@@ -29,3 +29,12 @@ only writes a ticket. "Review files…" opens the full thumbnail view for pickin
 If another desktop queues a ticket for the same card, the other desktops' prompts switch to "<name> is ingesting this
 card" and follow its progress, so two people don't ingest the same card twice. Desktops learn this by reading ticket
 files in `tickets/incoming/` and `tickets/processed/` (see `share.readTickets`); no daemon change is needed.
+
+### Saving to this computer
+The prompt's "Save to" can be the NAS, a folder on this computer, or both. A local copy reads the card over SMB (the
+card's own share, e.g. `usbshare6`, must be mounted; the prompt has a Connect card button) and writes with the same
+rules as the daemon: the same Project / Day / Group / roll layout, nothing is ever overwritten (a different file with the
+same name is kept as `name (2).ext`), and every file is hashed with xxh64 while it is read (checked against the NAS's
+checksum) and again after it is written. Finished files are skipped on a re-run, so a pulled card or a sleeping laptop
+just pauses the job and Resume continues. A local-only ingest does not tell the NAS the card was ingested, so the card
+still shows its files as New there.

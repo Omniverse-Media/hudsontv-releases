@@ -66,5 +66,8 @@
   },
   "author": "Omniverse Media <omniversemediagroup@gmail.com>",
   "homepage": "https://github.com/Omniverse-Media/hudsontv-releases",
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "xxhash-wasm": "^1.1.0"
+  }
 }

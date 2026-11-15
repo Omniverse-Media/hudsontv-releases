@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('harbor', {
   setVolumeRole: (fingerprint, role) => ipcRenderer.invoke('harbor:setVolumeRole', fingerprint, role),
   openMain: (fingerprint) => ipcRenderer.invoke('harbor:openMain', fingerprint),
   dismissPrompt: () => ipcRenderer.invoke('harbor:dismissPrompt'),
+  ingest: (req) => ipcRenderer.invoke('harbor:ingest', req),
+  pickLocalDest: () => ipcRenderer.invoke('harbor:pickLocalDest'),
+  localInfo: (fingerprint, dir) => ipcRenderer.invoke('harbor:localInfo', fingerprint, dir),
+  resumeLocal: (id) => ipcRenderer.invoke('harbor:resumeLocal', id),
+  revealLocal: (id) => ipcRenderer.invoke('harbor:revealLocal', id),
   onEvent: (cb) => {
     const fn = (_e, msg) => cb(msg);
     ipcRenderer.on('harbor:event', fn);

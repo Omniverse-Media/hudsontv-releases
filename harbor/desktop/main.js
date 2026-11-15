@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net, powerMonitor } = require('electron');
+const { app, powerSaveBlocker, BrowserWindow, Tray, Menu, Notification, dialog, ipcMain, shell, nativeImage, protocol, net, powerMonitor } = require('electron');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -9,6 +9,7 @@ const { withSidecars } = require('./core/logic');
 const { Poller } = require('./core/poller');
 const { Store } = require('./core/store');
 const playback = require('./core/playback');
+const localcopy = require('./core/localcopy');
 const { execFile, execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
@@ -20,6 +21,7 @@ let store = null;
 let poller = null;
 const latest = { cards: new Map(), daemon: { online: false, info: null }, share: { ok: false } };
 // The docked-card prompt: which card it is about, and any ticket (ours or another desktop's) already ingesting it.
+const localJobs = new Map(); // id -> {id, fingerprint, project, label, destRoot, job, run, aborter}
 const prompt = { fingerprint: null, claim: null, mineIds: new Set() };
 
 function send(type, payload) {
@@ -92,6 +94,57 @@ function notifyCard(manifest) {
   n.show();
 }
 
+// ---- local destination (copy to a folder on this computer) ----
+function cardRootFor(fingerprint) {
+  const manifest = latest.cards.get(fingerprint);
+  return manifest ? playback.findCardRoot(manifest, { override: (store.settings().cardRoots || {})[fingerprint] }) : null;
+}
+function inspectLocal(fingerprint, dir) {
+  const info = dir && path.isAbsolute(dir) ? localcopy.inspectDest(dir) : { exists: false, free: null, writable: false };
+  let projects = [];
+  try { projects = fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('.')).map((d) => d.name).sort(); } catch (e) { /* new folder */ }
+  const manifest = latest.cards.get(fingerprint);
+  return { ...info, projects, cardMounted: !!cardRootFor(fingerprint), cardShare: manifest ? playback.cardShareName(manifest) : null };
+}
+const publicLocal = (j) => ({ id: j.id, fingerprint: j.fingerprint, project: j.project, label: j.label, destRoot: j.destRoot, state: j.state });
+
+function startLocal(req) {
+  const manifest = latest.cards.get(req.fingerprint);
+  if (!manifest || !manifest.present) throw new Error('That card is no longer present.');
+  if (manifest.checksum_state !== 'complete') throw new Error('The card is still being scanned.');
+  const byPath = new Map(manifest.files.map((f) => [f.relative_path, f]));
+  const selection = withSidecars(manifest.files, req.selected).map((rel) => {
+    const f = byPath.get(rel);
+    return { relative_path: rel, size: f.size, checksum: f.checksum || null };
+  });
+  if (!selection.length) throw new Error('Select at least one file.');
+  const dit = req.dit ? { day: req.dit.day, group: req.dit.group, roll_prefix: require('./core/logic').rollPrefix(req.dit.group) } : null;
+  const id = crypto.randomUUID();
+  const j = { id, fingerprint: req.fingerprint, project: (req.projectName || '').trim(), label: manifest.card.label || req.fingerprint, destRoot: req.localRoot,
+    job: { manifest, selection, destRoot: req.localRoot, project: req.projectName, dit, subfolderMap: req.subfolderMap, origin: origin() }, state: null, aborter: null };
+  localJobs.set(id, j);
+  runLocal(j);
+  return id;
+}
+
+function resumeLocal(id) {
+  const j = localJobs.get(id);
+  if (!j || (j.aborter && !j.aborter.signal.aborted && j.state && j.state.state === 'running')) return false;
+  j.job.manifest = latest.cards.get(j.fingerprint) || j.job.manifest;
+  runLocal(j);
+  return true;
+}
+
+function runLocal(j) {
+  j.aborter = new AbortController();
+  j.job.cardRoot = cardRootFor(j.fingerprint);
+  // Keep the computer awake while copying: sleep would drop the SMB mount mid-file.
+  const blocker = powerSaveBlocker.start('prevent-app-suspension');
+  localcopy.runLocalIngest(j.job, (st) => { j.state = { ...st, files: st.files.map((f) => ({ ...f })) }; send('local', publicLocal(j)); }, j.aborter.signal)
+    .catch((e) => { j.state = { state: 'failed', message: String(e.message || e), progress: 0, files: [] }; send('local', publicLocal(j)); })
+    .finally(() => { powerSaveBlocker.stop(blocker); });
+}
+
 function origin() {
   const s = store.settings();
   return { machine: s.machine, user: s.user };
@@ -106,6 +159,7 @@ function setupIpc() {
     share: latest.share,
     reconnect: { busy: reconnect.busy, failed: reconnect.failed, url: store.settings().shareUrl || null },
     prompt: promptInfo(),
+    localJobs: [...localJobs.values()].map(publicLocal),
   }));
 
   ipcMain.handle('harbor:openMain', (_e, fingerprint) => {
@@ -117,7 +171,7 @@ function setupIpc() {
 
   ipcMain.handle('harbor:saveSettings', (_e, patch) => {
     const allowed = {};
-    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks', 'dockPrompt']) if (k in patch) allowed[k] = patch[k];
+    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks', 'dockPrompt', 'localRoot', 'destMode']) if (k in patch) allowed[k] = patch[k];
     const s = store.saveSettings(allowed);
     if ('shareRoot' in allowed) poller.tick();
     return s;
@@ -130,7 +184,35 @@ function setupIpc() {
     return r.canceled ? null : r.filePaths[0];
   });
 
-  ipcMain.handle('harbor:submit', (_e, req) => {
+  ipcMain.handle('harbor:submit', (_e, req) => submitNas(req));
+
+  // Destination can be the NAS, a folder on this computer, or both. Local copies read the card over SMB.
+  ipcMain.handle('harbor:ingest', (_e, req) => {
+    const mode = req.mode || 'nas';
+    if (!['nas', 'local', 'both'].includes(mode)) throw new Error('Unknown destination.');
+    const out = { ticketId: null, localId: null };
+    if (mode !== 'nas') {
+      const lr = req.localRoot;
+      if (!lr || !path.isAbsolute(lr)) throw new Error('Choose a folder on this computer.');
+      const cur = inspectLocal(req.fingerprint, lr);
+      if (!cur.cardMounted) throw new Error('This computer can\'t see the card yet. Press Connect card first.');
+      store.saveSettings({ localRoot: lr });
+    }
+    if (mode !== 'local') out.ticketId = submitNas(req); // first, so a bad NAS request stops before any local copy
+    if (mode !== 'nas') out.localId = startLocal(req);
+    store.saveSettings({ destMode: mode });
+    return out;
+  });
+
+  ipcMain.handle('harbor:pickLocalDest', async () => {
+    const r = await dialog.showOpenDialog(promptWin && promptWin.isFocused() ? promptWin : win, { properties: ['openDirectory', 'createDirectory'], title: 'Choose a folder on this computer' });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  ipcMain.handle('harbor:localInfo', (_e, fingerprint, dir) => inspectLocal(fingerprint, dir));
+  ipcMain.handle('harbor:resumeLocal', (_e, id) => resumeLocal(id));
+  ipcMain.handle('harbor:revealLocal', (_e, id) => { const j = localJobs.get(id); if (j && j.state && j.state.dir) shell.showItemInFolder(j.state.dir); return !!(j && j.state && j.state.dir); });
+
+  function submitNas(req) {
     const root = store.settings().shareRoot;
     // Build from the manifest on the share, not from anything the renderer claims about files.
     const manifest = share.listCards(root).find((m) => m.card.fingerprint === req.fingerprint);
@@ -152,7 +234,7 @@ function setupIpc() {
     poller.watch(ticket.ticket_id);
     prompt.mineIds.add(ticket.ticket_id);
     return ticket.ticket_id;
-  });
+  }
 
   ipcMain.handle('harbor:confirmClear', (_e, ticketId) => {
     const root = store.settings().shareRoot;
