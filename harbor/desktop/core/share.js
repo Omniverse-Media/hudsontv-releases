@@ -106,7 +106,32 @@ function submitVolumeRole(shareRoot, fingerprint, role, origin) {
   });
 }
 
+// Tickets other desktops wrote for a card, so every desktop can tell "someone else is already ingesting this".
+// Lists the small ticket JSON files in incoming/ (queued) and processed/ (picked up); `seen` skips names read before.
+function readTickets(shareRoot, seen) {
+  const d = dirs(shareRoot);
+  const out = [];
+  for (const dir of [d.incoming, d.processed]) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch (e) { continue; }
+    for (const n of names) {
+      const m = /^([0-9a-f-]{36})\.json$/.exec(n);
+      if (!m || !UUID.test(m[1]) || seen.has(m[1])) continue;
+      const t = readJson(path.join(dir, n));
+      if (!t) continue; // half-written: try again next poll
+      seen.add(m[1]);
+      if (!t.source || !t.destination) continue;
+      out.push({
+        ticket_id: m[1], fingerprint: t.source.card_fingerprint, origin: t.origin || {}, created_at: t.created_at,
+        project: t.destination.project_name, files: Array.isArray(t.selection) ? t.selection.length : 0,
+        dit: t.destination.dit || null,
+      });
+    }
+  }
+  return out;
+}
+
 module.exports = {
-  dirs, checkShare, readDaemonInfo, listCards, readStatus, submitTicket, submitClearConfirm, submitVolumeRole,
+  readTickets, dirs, checkShare, readDaemonInfo, listCards, readStatus, submitTicket, submitClearConfirm, submitVolumeRole,
   UUID, FINGERPRINT, DAEMON_STALE_MS,
 };

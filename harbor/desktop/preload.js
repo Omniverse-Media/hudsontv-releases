@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('harbor', {
   pickCardFolder: (fingerprint) => ipcRenderer.invoke('harbor:pickCardFolder', fingerprint),
   openClipExternally: (fingerprint, rel) => ipcRenderer.invoke('harbor:openClipExternally', fingerprint, rel),
   setVolumeRole: (fingerprint, role) => ipcRenderer.invoke('harbor:setVolumeRole', fingerprint, role),
+  openMain: (fingerprint) => ipcRenderer.invoke('harbor:openMain', fingerprint),
+  dismissPrompt: () => ipcRenderer.invoke('harbor:dismissPrompt'),
   onEvent: (cb) => {
     const fn = (_e, msg) => cb(msg);
     ipcRenderer.on('harbor:event', fn);

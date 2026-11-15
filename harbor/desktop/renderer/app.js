@@ -62,6 +62,7 @@ function onEvent({ type, payload }) {
   else if (type === 'daemon') S.daemon = payload;
   else if (type === 'share') S.share = payload;
   else if (type === 'reconnect') S.reconnect = payload;
+  else if (type === 'focus-card') { const m = payload && S.cards.get(payload); if (m) S.view = viewFor(m); }
   else if (type === 'status') S.statuses.set(payload.ticket_id, payload);
   renderAll();
 }
@@ -450,6 +451,7 @@ function alertDialog(title, msg) {
 function openSettings() {
   const dlg = $('dlg');
   const share = h('input', { type: 'text', value: S.settings.shareRoot, placeholder: '/Volumes/harbor or Z:\\' });
+  const dockPrompt = h('input', { type: 'checkbox', checked: S.settings.dockPrompt !== false });
   const user = h('input', { type: 'text', value: S.settings.user });
   const machine = h('input', { type: 'text', value: S.settings.machine });
   const folders = {};
@@ -458,12 +460,13 @@ function openSettings() {
     h('p', { class: 'meta' }, 'Choose the mapped Harbor share. Harbor talks to the NAS only through files on this share, using your existing SMB login.'),
     h('div', { class: 'form', style: 'grid-template-columns:110px 1fr' },
       h('label', {}, 'Harbor share'), h('div', {}, share, ' ', h('button', { class: 'ghost', onclick: async () => { const p = await window.harbor.pickShare(); if (p) share.value = p; } }, 'Browse')),
+      h('label', {}, 'Card prompt'), h('label', {}, dockPrompt, ' Pop up a window when a card is docked'),
       h('label', {}, 'Your name'), user, h('label', {}, 'This computer'), machine),
     h('p', { class: 'meta' }, 'Inside each project folder, files are sorted into these subfolders:'),
     h('div', { class: 'form', style: 'grid-template-columns:110px 1fr' }, MEDIA.flatMap((t) => [h('label', {}, t), folders[t]])),
     h('div', { class: 'actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'),
       h('button', { onclick: async () => { const subfolderMap = {}; for (const t of MEDIA) subfolderMap[t] = folders[t].value.trim();
-        S.settings = await window.harbor.saveSettings({ shareRoot: share.value.trim(), user: user.value.trim(), machine: machine.value.trim(), subfolderMap }); dlg.close(); renderAll(); } }, 'Save')));
+        S.settings = await window.harbor.saveSettings({ dockPrompt: dockPrompt.checked, shareRoot: share.value.trim(), user: user.value.trim(), machine: machine.value.trim(), subfolderMap }); dlg.close(); renderAll(); } }, 'Save')));
   dlg.showModal();
 }
 

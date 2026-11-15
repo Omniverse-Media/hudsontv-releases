@@ -242,3 +242,21 @@ test('poller reports the daemon offline once the share is unreachable', () => {
   assert.equal(daemons.length, 2);
   assert.equal(daemons[1][1].online, false);
 });
+
+test('poller reports tickets any desktop writes, but not ones that predate the app', () => {
+  const root = makeShare();
+  const old = share.submitTicket(root, buildTicket({ manifest: manifest(), selected: ['PRIVATE/M4ROOT/CLIP/C1.MP4'], projectName: 'Old', approvedRoot: '/a', origin: { machine: 'Mac', user: 'A' } }));
+  const events = [];
+  const p = new Poller(() => root, (t, payload) => { if (t === 'ticket') events.push(payload); });
+  p.tick();
+  assert.equal(events.length, 0, 'tickets from before the app started are not claims');
+  const id = share.submitTicket(root, buildTicket({ manifest: manifest(), selected: ['PRIVATE/M4ROOT/CLIP/C1.MP4'], projectName: 'Shoot 5', approvedRoot: '/a', origin: { machine: 'Laptop', user: 'Dee' } }));
+  p.tick(); p.tick();
+  assert.equal(events.length, 1, 'reported once');
+  assert.deepEqual([events[0].ticket_id, events[0].fingerprint, events[0].project, events[0].files, events[0].origin.machine], [id, 'ABCD-1234', 'Shoot 5', 1, 'Laptop']);
+  assert.notEqual(old, id);
+  // a half-written file is retried, not dropped
+  fs.writeFileSync(path.join(root, 'tickets/incoming', '11111111-1111-4111-8111-111111111111.json'), '{');
+  p.tick();
+  assert.equal(events.length, 1);
+});
