@@ -270,3 +270,14 @@ test('announce mode: setting wins, old dockPrompt checkbox still respected', () 
   assert.equal(a.soundOn({}), true); assert.equal(a.soundOn({ announceSound: false }), false);
   assert.equal(a.badgeText(0), ''); assert.equal(a.badgeText(2), '2');
 });
+
+test('local ingest note is written atomically for the daemon', () => {
+  const root = makeShare();
+  share.submitLocalIngest(root, 'ABCD-1234', ['a/b.MP4'], { machine: 'Laptop', user: 'Dee' });
+  const f = path.join(root, 'tickets/incoming/ABCD-1234.local.json');
+  const body = JSON.parse(fs.readFileSync(f, 'utf8'));
+  assert.deepEqual([body.type, body.fingerprint, body.files], ['local_ingest', 'ABCD-1234', ['a/b.MP4']]);
+  assert.equal(fs.readdirSync(path.dirname(f)).filter((n) => n.startsWith('.')).length, 0);
+  assert.throws(() => share.submitLocalIngest(root, '../x', ['a'], {}), /fingerprint/);
+  assert.throws(() => share.submitLocalIngest(root, 'ABCD-1234', [], {}), /no files/);
+});

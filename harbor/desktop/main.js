@@ -166,12 +166,25 @@ function resumeLocal(id) {
   return true;
 }
 
+// Files that made it to this computer are reported to the NAS, so the card doesn't keep offering them as new.
+// Only files not yet reported (a resumed job reports the rest); best effort, the copy itself already succeeded.
+function noteLocalIngest(j, res) {
+  const ok = (res && res.files || []).filter((f) => f.state === 'verified' || f.state === 'skipped').map((f) => f.relative_path);
+  const fresh = ok.filter((r) => !(j.noted || (j.noted = new Set())).has(r));
+  if (!fresh.length) return;
+  try {
+    share.submitLocalIngest(store.settings().shareRoot, j.fingerprint, fresh, origin());
+    fresh.forEach((r) => j.noted.add(r));
+  } catch (e) { /* the NAS is unreachable right now: the copy is still good */ }
+}
+
 function runLocal(j) {
   j.aborter = new AbortController();
   j.job.cardRoot = cardRootFor(j.fingerprint);
   // Keep the computer awake while copying: sleep would drop the SMB mount mid-file.
   const blocker = powerSaveBlocker.start('prevent-app-suspension');
   localcopy.runLocalIngest(j.job, (st) => { j.state = { ...st, files: st.files.map((f) => ({ ...f })) }; send('local', publicLocal(j)); }, j.aborter.signal)
+    .then((res) => noteLocalIngest(j, res))
     .catch((e) => { j.state = { state: 'failed', message: String(e.message || e), progress: 0, files: [] }; send('local', publicLocal(j)); })
     .finally(() => { powerSaveBlocker.stop(blocker); });
 }

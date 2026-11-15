@@ -55,6 +55,13 @@ must equal the fingerprint. The daemon remembers the choice in `state/volume_rol
 volume is attached: `card` scans it, `ignore` republishes it as `ignored`. Tickets for a volume that is not a card are
 rejected.
 
+## Ingests done on a desktop: `incoming/<fingerprint>.local.json`
+`{"type":"local_ingest","fingerprint":"…","files":["relative/path",…],"origin":{…}}`. The desktop copied and verified
+these files from the card to its own disk. The daemon copies nothing: it looks the paths up in its own listing of the
+card (unknown paths are ignored, timestamps are never taken from the desktop), records the ingest like a finished job
+(`last_ingest_at`, newest ingested file time) and republishes the manifest so those files stop being `recent`. A note for
+a card that is not inserted is kept for 10 minutes, then dropped. A proof line goes to `logs/local-<fingerprint>-<time>.json`.
+
 ## Status: `status/<ticket_id>.json`
 `state`: `received | in_progress | done | failed`. Per file: `pending | copying | copied | verified | staged | failed`
 (the spec's four plus `pending` and `copying`). `message` carries "waiting for card …" / "paused: …" (the job resumes

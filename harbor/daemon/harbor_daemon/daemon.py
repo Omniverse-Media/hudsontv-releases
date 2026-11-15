@@ -257,6 +257,8 @@ class Daemon:
                 self._handle_clear_file(p, name[: -len(".clear.json")])
             elif name.endswith(".select.json"):
                 self._handle_select_file(p, name[: -len(".select.json")])
+            elif name.endswith(".local.json"):
+                self._handle_local_file(p, name[: -len(".local.json")])
             else:
                 self._handle_ticket_file(p, name[: -len(".json")])
 
@@ -383,6 +385,58 @@ class Daemon:
             fresh = _Card(card.mount, fp, card.source, new_role)
             self.cards[fp] = fresh
         self._start_volume(fresh)
+
+    # ---- ingests done on a desktop ---------------------------------------
+    def _handle_local_file(self, path, name_id):
+        """`<fingerprint>.local.json`: a desktop copied (and verified) files from this card to its own disk.
+
+        {"type": "local_ingest", "fingerprint", "files": [relative_path, ...], "origin": {...}}
+        The daemon did not copy anything; it only remembers the card was offloaded, so those files stop showing as new.
+        Timestamps come from the daemon's own listing of the card, never from the desktop.
+        """
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (ValueError, UnicodeDecodeError):
+            try:
+                if time.time() - os.stat(path).st_mtime < PARTIAL_TICKET_GRACE:
+                    return
+            except OSError:
+                return
+            return self._move_processed(path)
+        except OSError:
+            return
+        files = raw.get("files") if isinstance(raw, dict) else None
+        if (not isinstance(raw, dict) or raw.get("type") != "local_ingest" or raw.get("fingerprint") != name_id
+                or not isinstance(files, list) or not files or not all(isinstance(x, str) for x in files)):
+            log.warning("bad local ingest note %s", name_id)
+            return self._move_processed(path)
+        with self.lock:
+            card = self.cards.get(name_id)
+        manifest = card.manifest if card is not None else None
+        if not manifest or manifest.get("role", "card") != "card":
+            # Card not inserted right now: keep the note a while in case it is mid-rescan, then give up.
+            try:
+                if time.time() - os.stat(path).st_mtime > 600:
+                    log.warning("local ingest note for absent card %s dropped", name_id)
+                    self._move_processed(path)
+            except OSError:
+                pass
+            return
+        want = set(files)
+        stamps = [f["_ts"] for f in manifest["files"] if f["relative_path"] in want and f.get("_ts") is not None]
+        origin = raw.get("origin") if isinstance(raw.get("origin"), dict) else {}
+        if stamps:
+            self.card_store.note_ingest(name_id, stamps)
+            manifest_mod.apply_ingest(manifest, self.card_store.record(name_id))
+            self._publish_manifest(card)
+        log.info("card %s: %d file(s) offloaded to a desktop by %s", name_id, len(stamps), origin)
+        try:
+            write_json_atomic(os.path.join(self.cfg.logs_dir, "local-%s-%d.json" % (name_id, int(time.time()))),
+                              {"fingerprint": name_id, "files": sorted(want), "matched": len(stamps), "origin": origin, "at": now_iso()})
+        except OSError:
+            pass
+        self._move_processed(path)
 
     # ---- clear confirmations ------------------------------------------
     def _handle_clear_file(self, path, name_id):

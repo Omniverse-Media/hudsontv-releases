@@ -131,7 +131,16 @@ function readTickets(shareRoot, seen) {
   return out;
 }
 
+// Tell the daemon that these files were copied off the card by this desktop, so they stop showing as new.
+function submitLocalIngest(shareRoot, fingerprint, files, origin) {
+  if (!FINGERPRINT.test(fingerprint)) throw new Error('bad fingerprint');
+  if (!Array.isArray(files) || !files.length) throw new Error('no files');
+  writeAtomic(dirs(shareRoot).incoming, fingerprint + '.local.json', {
+    type: 'local_ingest', fingerprint, files, created_at: new Date().toISOString(), origin,
+  });
+}
+
 module.exports = {
-  readTickets, dirs, checkShare, readDaemonInfo, listCards, readStatus, submitTicket, submitClearConfirm, submitVolumeRole,
+  submitLocalIngest, readTickets, dirs, checkShare, readDaemonInfo, listCards, readStatus, submitTicket, submitClearConfirm, submitVolumeRole,
   UUID, FINGERPRINT, DAEMON_STALE_MS,
 };

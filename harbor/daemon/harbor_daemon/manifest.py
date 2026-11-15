@@ -46,6 +46,17 @@ def iter_card_files(mount_path, ignore_names):
             yield os.path.relpath(ap, mount_path).replace(os.sep, "/"), ap
 
 
+def apply_ingest(manifest, record):
+    """After an ingest outside the daemon: files up to the newest ingested one are no longer new."""
+    last = record.get("last_ingested_file_ts")
+    manifest["last_ingest_at"] = record.get("last_ingest_at")
+    if last is not None:
+        manifest["recent_basis"] = "last_ingested_file_ts"
+        for f in manifest["files"]:
+            if f.get("_ts") is not None and f["_ts"] <= last:
+                f["recent"] = False
+
+
 def build_listing(cfg, profiles, mount, fingerprint, fp_source, record, now):
     """Phase 1: fast listing with no checksums. Safe to publish immediately."""
     matched = profiles.match(mount.path)

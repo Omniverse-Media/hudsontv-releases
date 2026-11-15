@@ -36,5 +36,5 @@ card's own share, e.g. `usbshare6`, must be mounted; the prompt has a Connect ca
 rules as the daemon: the same Project / Day / Group / roll layout, nothing is ever overwritten (a different file with the
 same name is kept as `name (2).ext`), and every file is hashed with xxh64 while it is read (checked against the NAS's
 checksum) and again after it is written. Finished files are skipped on a re-run, so a pulled card or a sleeping laptop
-just pauses the job and Resume continues. A local-only ingest does not tell the NAS the card was ingested, so the card
-still shows its files as New there.
+just pauses the job and Resume continues. Files that reach this computer are reported to the NAS (`<fingerprint>.local.json`), so the card
+stops offering them as New for everyone.
