@@ -14,14 +14,39 @@ const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
 
 let win = null;
+let promptWin = null;
 let tray = null;
 let store = null;
 let poller = null;
 const latest = { cards: new Map(), daemon: { online: false, info: null }, share: { ok: false } };
+// The docked-card prompt: which card it is about, and any ticket (ours or another desktop's) already ingesting it.
+const prompt = { fingerprint: null, claim: null, mineIds: new Set() };
 
 function send(type, payload) {
-  if (win && !win.isDestroyed()) win.webContents.send('harbor:event', { type, payload });
+  for (const w of [win, promptWin]) if (w && !w.isDestroyed()) w.webContents.send('harbor:event', { type, payload });
 }
+
+// A small window that comes to the front when a card is docked, so ingest is one glance and one click.
+function showPrompt(manifest) {
+  prompt.fingerprint = manifest.card.fingerprint;
+  prompt.claim = null;
+  send('prompt', promptInfo());
+  if (promptWin && !promptWin.isDestroyed()) { promptWin.show(); promptWin.focus(); return; }
+  promptWin = new BrowserWindow({
+    width: 560, height: 700, minWidth: 460, minHeight: 520, title: 'Card docked', show: false,
+    alwaysOnTop: true, fullscreenable: false, minimizable: false,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  promptWin.setAlwaysOnTop(true, 'floating');
+  promptWin.loadFile(path.join(__dirname, 'renderer', 'prompt.html'));
+  promptWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  promptWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  promptWin.once('ready-to-show', () => { promptWin.show(); promptWin.focus(); });
+  promptWin.on('closed', () => { promptWin = null; prompt.fingerprint = null; prompt.claim = null; });
+}
+
+function closePrompt() { if (promptWin && !promptWin.isDestroyed()) promptWin.close(); }
+function promptInfo() { return { fingerprint: prompt.fingerprint, claim: prompt.claim }; }
 
 function showWindow() {
   if (!win) return createWindow();
@@ -45,7 +70,10 @@ function createWindow() {
 }
 
 function notifyCard(manifest) {
-  if (!Notification.isSupported() || manifest.role === 'ignored') return;
+  if (manifest.role === 'ignored') return;
+  // A card ready to ingest gets the prompt window (unless turned off); other cases keep the system notification.
+  if ((!manifest.role || manifest.role === 'card') && store.settings().dockPrompt !== false) { showPrompt(manifest); return; }
+  if (!Notification.isSupported()) return;
   if (manifest.role === 'unassigned') {
     const n = new Notification({
       title: 'USB drive found on the NAS',
@@ -77,11 +105,19 @@ function setupIpc() {
     daemon: latest.daemon,
     share: latest.share,
     reconnect: { busy: reconnect.busy, failed: reconnect.failed, url: store.settings().shareUrl || null },
+    prompt: promptInfo(),
   }));
+
+  ipcMain.handle('harbor:openMain', (_e, fingerprint) => {
+    showWindow();
+    send('focus-card', fingerprint || null);
+    closePrompt();
+  });
+  ipcMain.handle('harbor:dismissPrompt', () => closePrompt());
 
   ipcMain.handle('harbor:saveSettings', (_e, patch) => {
     const allowed = {};
-    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks']) if (k in patch) allowed[k] = patch[k];
+    for (const k of ['shareRoot', 'machine', 'user', 'subfolderMap', 'lastRoot', 'organize', 'groups', 'cardGroups', 'cardLooks', 'dockPrompt']) if (k in patch) allowed[k] = patch[k];
     const s = store.saveSettings(allowed);
     if ('shareRoot' in allowed) poller.tick();
     return s;
@@ -114,6 +150,7 @@ function setupIpc() {
       bytes: ticket.selection.reduce((a, f) => a + f.size, 0), created_at: ticket.created_at,
     });
     poller.watch(ticket.ticket_id);
+    prompt.mineIds.add(ticket.ticket_id);
     return ticket.ticket_id;
   });
 
@@ -270,8 +307,21 @@ function startPoller() {
     if (type === 'card') {
       latest.cards.set(payload.manifest.card.fingerprint, payload.manifest);
       if (payload.isNew) notifyCard(payload.manifest);
-    } else if (type === 'card-gone') latest.cards.delete(payload);
-    else if (type === 'daemon') latest.daemon = payload;
+    } else if (type === 'card-gone') {
+      latest.cards.delete(payload);
+      if (payload === prompt.fingerprint && !prompt.mineIds.size && !prompt.claim) closePrompt();
+    }
+    else if (type === 'ticket') {
+      // Another desktop (or this one) queued a job for the docked card: show who has it, and follow its progress.
+      if (payload.fingerprint === prompt.fingerprint && !prompt.mineIds.has(payload.ticket_id)) {
+        const me = origin();
+        prompt.claim = { ...payload, by: payload.origin.user || payload.origin.machine || 'Another desktop',
+          machine: payload.origin.machine || null, self: payload.origin.machine === me.machine && payload.origin.user === me.user };
+        poller.watch(payload.ticket_id);
+        send('prompt', promptInfo());
+      }
+      return;
+    } else if (type === 'daemon') latest.daemon = payload;
     else if (type === 'share') latest.share = payload;
     send(type, payload);
   });

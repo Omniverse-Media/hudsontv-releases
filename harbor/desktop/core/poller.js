@@ -16,6 +16,7 @@ class Poller {
     this.shareOk = null;
     this.daemonOnline = null;
     this.firstScan = true;
+    this.ticketsSeen = new Set(); // ticket ids already reported as 'ticket'
   }
 
   start() { this.tick(); this.timer = setInterval(() => this.tick(), this.intervalMs); }
@@ -59,6 +60,10 @@ class Poller {
       this.misses.set(fp, n);
       if (n >= MISSES_BEFORE_GONE) { this.cards.delete(fp); this.misses.delete(fp); this.emit('card-gone', fp); }
     }
+    // Tickets any desktop wrote (including this one): lets every desktop see a card is already being ingested.
+    // Tickets that predate this app run are marked seen without being reported.
+    const found = share.readTickets(root, this.ticketsSeen);
+    if (!this.firstScan) for (const t of found) this.emit('ticket', t);
     this.firstScan = false;
 
     for (const [id, last] of this.watched) {
